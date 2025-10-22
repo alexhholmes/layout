@@ -3,7 +3,7 @@ package analyzer
 import (
 	"testing"
 
-	parser2 "layout/internal/parser"
+	parser2 "github.com/alexhholmes/layout/internal/parser"
 )
 
 func TestAnalyze_SimpleFixed(t *testing.T) {

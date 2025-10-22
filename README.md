@@ -27,7 +27,7 @@ type Page struct {
 
 Generate code:
 ```bash
-$ layoutgen generate page.go
+$ layout generate page.go
 Generated: page_layout.go
   - Page.MarshalLayout() ([]byte, error)
   - Page.UnmarshalLayout([]byte) error
@@ -294,13 +294,13 @@ go get github.com/yourname/layout
 
 ### As go generate directive
 ```go
-//go:generate layoutgen generate page.go
+//go:generate layout generate page.go
 ```
 
 ### Command line
 ```bash
-layoutgen generate page.go           # Generate page_layout.go
-layoutgen generate btree/*.go        # Generate for package
+layout generate page.go           # Generate page_layout.go
+layout generate btree/*.go        # Generate for package
 ```
 
 ## Architecture

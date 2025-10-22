@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"sort"
 
-	parser2 "layout/internal/parser"
+	"github.com/alexhholmes/layout/internal/parser"
 )
 
 // Region represents a memory region in the layout
@@ -12,8 +12,8 @@ type Region struct {
 	Kind      RegionKind
 	Start     int // Byte offset where region begins
 	Boundary  int // Byte offset where region must stop (-1 if end of buffer)
-	Direction parser2.PackDirection
-	Field     parser2.Field // The field occupying this region
+	Direction parser.PackDirection
+	Field     parser.Field // The field occupying this region
 }
 
 type RegionKind int
@@ -32,7 +32,7 @@ type AnalyzedLayout struct {
 }
 
 // Analyze performs layout analysis on a parsed type
-func Analyze(layout *parser2.TypeLayout, registry *TypeRegistry) (*AnalyzedLayout, error) {
+func Analyze(layout *parser.TypeLayout, registry *TypeRegistry) (*AnalyzedLayout, error) {
 	if layout == nil {
 		return nil, fmt.Errorf("layout is nil")
 	}
@@ -74,13 +74,13 @@ func Analyze(layout *parser2.TypeLayout, registry *TypeRegistry) (*AnalyzedLayou
 	return a, nil
 }
 
-func buildRegion(field parser2.Field, bufferSize int, registry *TypeRegistry) (Region, error) {
+func buildRegion(field parser.Field, bufferSize int, registry *TypeRegistry) (Region, error) {
 	r := Region{
 		Field:    field,
 		Boundary: -1, // Unknown until calculateBoundaries
 	}
 
-	if field.Layout.Direction == parser2.Fixed {
+	if field.Layout.Direction == parser.Fixed {
 		// Fixed field: calculate size and end offset
 		size, err := registry.SizeOf(field.GoType)
 		if err != nil {
@@ -93,7 +93,7 @@ func buildRegion(field parser2.Field, bufferSize int, registry *TypeRegistry) (R
 		r.Kind = FixedRegion
 		r.Start = field.Layout.Offset
 		r.Boundary = field.Layout.Offset + size
-		r.Direction = parser2.Fixed
+		r.Direction = parser.Fixed
 
 		if r.Boundary > bufferSize {
 			return r, fmt.Errorf("field [%d, %d) exceeds buffer size %d",
@@ -121,7 +121,7 @@ func buildRegion(field parser2.Field, bufferSize int, registry *TypeRegistry) (R
 		r.Start = field.Layout.StartAt
 	} else {
 		// Implicit start: calculated in Phase 2
-		if field.Layout.Direction == parser2.EndStart {
+		if field.Layout.Direction == parser.EndStart {
 			r.Start = bufferSize // Grows backward from end
 		} else {
 			r.Start = 0 // Temporary, calculated in Phase 2
@@ -141,7 +141,7 @@ func calculateBoundaries(a *AnalyzedLayout) error {
 	// Calculate implicit start points for start-end regions
 	for i := range a.Regions {
 		r := &a.Regions[i]
-		if r.Kind == DynamicRegion && r.Direction == parser2.StartEnd && r.Field.Layout.StartAt < 0 {
+		if r.Kind == DynamicRegion && r.Direction == parser.StartEnd && r.Field.Layout.StartAt < 0 {
 			// Find end of previous fixed region or start of buffer
 			r.Start = findPreviousEnd(a.Regions, i)
 		}
@@ -155,7 +155,7 @@ func calculateBoundaries(a *AnalyzedLayout) error {
 		}
 
 		// Find boundary for dynamic region
-		if r.Direction == parser2.StartEnd {
+		if r.Direction == parser.StartEnd {
 			// Growing forward: boundary is start of next region
 			r.Boundary = findNextStart(a.Regions, i, a.BufferSize)
 		} else {
@@ -173,7 +173,7 @@ func findPreviousEnd(regions []Region, idx int) int {
 		if regions[i].Kind == FixedRegion {
 			return regions[i].Boundary
 		}
-		if regions[i].Direction == parser2.StartEnd && regions[i].Field.Layout.StartAt >= 0 {
+		if regions[i].Direction == parser.StartEnd && regions[i].Field.Layout.StartAt >= 0 {
 			// Previous dynamic region with explicit start
 			return regions[i].Start
 		}
@@ -194,7 +194,7 @@ func findNextStart(regions []Region, idx int, bufferSize int) int {
 	return bufferSize // End of buffer
 }
 
-func validateCountFields(a *AnalyzedLayout, layout *parser2.TypeLayout) error {
+func validateCountFields(a *AnalyzedLayout, layout *parser.TypeLayout) error {
 	// Check if dynamic fields with no fixed boundary have count fields
 	for _, region := range a.Regions {
 		if region.Kind != DynamicRegion {
@@ -205,7 +205,7 @@ func validateCountFields(a *AnalyzedLayout, layout *parser2.TypeLayout) error {
 
 		// Determine if count is required
 		needsCount := false
-		if region.Direction == parser2.EndStart {
+		if region.Direction == parser.EndStart {
 			// end-start: needs count if boundary is not 0 and not a fixed field
 			needsCount = region.Boundary == 0 && hasNonFixedBefore(a.Regions, region)
 		} else {
