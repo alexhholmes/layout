@@ -287,8 +287,10 @@ Runtime checks:
 ## Installation
 
 ```bash
-go get github.com/yourname/layout
+go install github.com/alexhholmes/layout/cmd/layout@latest
 ```
+
+After install, `layout` command available globally.
 
 ## Usage
 
