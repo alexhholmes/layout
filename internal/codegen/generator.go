@@ -209,8 +209,14 @@ func (g *Generator) generateCopyUnmarshal() string {
 func (g *Generator) generateZeroCopyUnmarshal() string {
 	var code strings.Builder
 
-	// UnmarshalLayout: no params, assumes p.buf already loaded
-	code.WriteString(fmt.Sprintf("func (p *%s) UnmarshalLayout() error {\n", g.analyzed.TypeName))
+	// UnmarshalLayout: keep buf parameter for backward compatibility, but use p.buf
+	code.WriteString(fmt.Sprintf("func (p *%s) UnmarshalLayout(buf []byte) error {\n", g.analyzed.TypeName))
+	code.WriteString(fmt.Sprintf("\t// Zero-copy mode: copy buf into p.buf if different\n"))
+	code.WriteString("\tif len(buf) > 0 && len(p.buf) > 0 {\n")
+	code.WriteString("\t\tif &buf[0] != &p.buf[0] {\n")
+	code.WriteString("\t\t\tcopy(p.buf, buf)\n")
+	code.WriteString("\t\t}\n")
+	code.WriteString("\t}\n\n")
 
 	// Generate code for each region
 	for _, region := range g.analyzed.Regions {
@@ -230,12 +236,12 @@ func (g *Generator) generateZeroCopyUnmarshal() string {
 	return code.String()
 }
 
-// generateNewFunction generates New() constructor for aligned buffer allocation
+// generateNewFunction generates New<TypeName>() constructor for aligned buffer allocation
 func (g *Generator) generateNewFunction() string {
 	var code strings.Builder
 	requiredSize := g.analyzed.BufferSize + g.align - 1
 
-	code.WriteString(fmt.Sprintf("func New() *%s {\n", g.analyzed.TypeName))
+	code.WriteString(fmt.Sprintf("func New%s() *%s {\n", g.analyzed.TypeName, g.analyzed.TypeName))
 	code.WriteString(fmt.Sprintf("\tp := &%s{}\n", g.analyzed.TypeName))
 
 	if g.allocator != "" {
@@ -279,7 +285,7 @@ func (g *Generator) generateLoadFromHelper() string {
 	code.WriteString("\tif _, err := io.ReadFull(r, p.buf[:]); err != nil {\n")
 	code.WriteString("\t\treturn err\n")
 	code.WriteString("\t}\n")
-	code.WriteString("\treturn p.UnmarshalLayout()\n")
+	code.WriteString("\treturn p.UnmarshalLayout(p.buf)\n")
 	code.WriteString("}\n\n")
 
 	// WriteTo: marshal and write p.buf to io.Writer
@@ -347,6 +353,22 @@ func (g *Generator) generateFixedMarshal(region analyzer.Region) string {
 		// Handle arrays
 		if strings.HasPrefix(field.GoType, "[") && strings.Contains(field.GoType, "]byte") {
 			code.WriteString(fmt.Sprintf("\tcopy(buf[%d:%d], p.%s[:])\n\n", start, end, field.Name))
+		} else if resolvedType == "uint8" || resolvedType == "int8" || resolvedType == "byte" {
+			// Primitive alias to byte
+			code.WriteString(fmt.Sprintf("\tbuf[%d] = byte(p.%s)\n\n", start, field.Name))
+		} else if resolvedType == "uint16" || resolvedType == "int16" {
+			// Primitive alias that wasn't caught in switch (shouldn't happen but handle it)
+			putFunc := g.binaryPutFunc(field.GoType)
+			code.WriteString(fmt.Sprintf("\t%s.%s(buf[%d:%d], %s(p.%s))\n\n",
+				g.endianPrefix(), putFunc, start, end, resolvedType, field.Name))
+		} else if resolvedType == "uint32" || resolvedType == "int32" {
+			putFunc := g.binaryPutFunc(field.GoType)
+			code.WriteString(fmt.Sprintf("\t%s.%s(buf[%d:%d], %s(p.%s))\n\n",
+				g.endianPrefix(), putFunc, start, end, resolvedType, field.Name))
+		} else if resolvedType == "uint64" || resolvedType == "int64" {
+			putFunc := g.binaryPutFunc(field.GoType)
+			code.WriteString(fmt.Sprintf("\t%s.%s(buf[%d:%d], %s(p.%s))\n\n",
+				g.endianPrefix(), putFunc, start, end, resolvedType, field.Name))
 		} else {
 			// Handle struct types with MarshalLayout
 			code.WriteString(fmt.Sprintf("\telemBuf, err := p.%s.MarshalLayout()\n", field.Name))
@@ -790,33 +812,71 @@ func (g *Generator) generateZeroCopyFixedUnmarshal(region analyzer.Region) strin
 
 	code.WriteString(fmt.Sprintf("\t// %s: %s at [%d, %d)\n", field.Name, field.GoType, start, end))
 
-	switch field.GoType {
+	// Resolve type aliases
+	resolvedType := g.registry.ResolveType(field.GoType)
+	needsCast := resolvedType != field.GoType
+
+	switch resolvedType {
 	case "uint8", "int8", "byte":
-		code.WriteString(fmt.Sprintf("\tp.%s = p.buf[%d]\n\n", field.Name, start))
+		if needsCast {
+			code.WriteString(fmt.Sprintf("\tp.%s = %s(p.buf[%d])\n\n", field.Name, field.GoType, start))
+		} else {
+			code.WriteString(fmt.Sprintf("\tp.%s = p.buf[%d]\n\n", field.Name, start))
+		}
 
 	case "uint16":
-		code.WriteString(fmt.Sprintf("\tp.%s = *(*uint16)(unsafe.Pointer(&p.buf[%d]))\n\n",
-			field.Name, start))
+		if needsCast {
+			code.WriteString(fmt.Sprintf("\tp.%s = %s(*(*uint16)(unsafe.Pointer(&p.buf[%d])))\n\n",
+				field.Name, field.GoType, start))
+		} else {
+			code.WriteString(fmt.Sprintf("\tp.%s = *(*uint16)(unsafe.Pointer(&p.buf[%d]))\n\n",
+				field.Name, start))
+		}
 
 	case "int16":
-		code.WriteString(fmt.Sprintf("\tp.%s = *(*int16)(unsafe.Pointer(&p.buf[%d]))\n\n",
-			field.Name, start))
+		if needsCast {
+			code.WriteString(fmt.Sprintf("\tp.%s = %s(*(*int16)(unsafe.Pointer(&p.buf[%d])))\n\n",
+				field.Name, field.GoType, start))
+		} else {
+			code.WriteString(fmt.Sprintf("\tp.%s = *(*int16)(unsafe.Pointer(&p.buf[%d]))\n\n",
+				field.Name, start))
+		}
 
 	case "uint32":
-		code.WriteString(fmt.Sprintf("\tp.%s = *(*uint32)(unsafe.Pointer(&p.buf[%d]))\n\n",
-			field.Name, start))
+		if needsCast {
+			code.WriteString(fmt.Sprintf("\tp.%s = %s(*(*uint32)(unsafe.Pointer(&p.buf[%d])))\n\n",
+				field.Name, field.GoType, start))
+		} else {
+			code.WriteString(fmt.Sprintf("\tp.%s = *(*uint32)(unsafe.Pointer(&p.buf[%d]))\n\n",
+				field.Name, start))
+		}
 
 	case "int32":
-		code.WriteString(fmt.Sprintf("\tp.%s = *(*int32)(unsafe.Pointer(&p.buf[%d]))\n\n",
-			field.Name, start))
+		if needsCast {
+			code.WriteString(fmt.Sprintf("\tp.%s = %s(*(*int32)(unsafe.Pointer(&p.buf[%d])))\n\n",
+				field.Name, field.GoType, start))
+		} else {
+			code.WriteString(fmt.Sprintf("\tp.%s = *(*int32)(unsafe.Pointer(&p.buf[%d]))\n\n",
+				field.Name, start))
+		}
 
 	case "uint64":
-		code.WriteString(fmt.Sprintf("\tp.%s = *(*uint64)(unsafe.Pointer(&p.buf[%d]))\n\n",
-			field.Name, start))
+		if needsCast {
+			code.WriteString(fmt.Sprintf("\tp.%s = %s(*(*uint64)(unsafe.Pointer(&p.buf[%d])))\n\n",
+				field.Name, field.GoType, start))
+		} else {
+			code.WriteString(fmt.Sprintf("\tp.%s = *(*uint64)(unsafe.Pointer(&p.buf[%d]))\n\n",
+				field.Name, start))
+		}
 
 	case "int64":
-		code.WriteString(fmt.Sprintf("\tp.%s = *(*int64)(unsafe.Pointer(&p.buf[%d]))\n\n",
-			field.Name, start))
+		if needsCast {
+			code.WriteString(fmt.Sprintf("\tp.%s = %s(*(*int64)(unsafe.Pointer(&p.buf[%d])))\n\n",
+				field.Name, field.GoType, start))
+		} else {
+			code.WriteString(fmt.Sprintf("\tp.%s = *(*int64)(unsafe.Pointer(&p.buf[%d]))\n\n",
+				field.Name, start))
+		}
 
 	default:
 		// Check if it's a byte array
@@ -946,33 +1006,71 @@ func (g *Generator) generateZeroCopyFixedMarshal(region analyzer.Region) string 
 
 	code.WriteString(fmt.Sprintf("\t// %s: %s at [%d, %d)\n", field.Name, field.GoType, start, end))
 
-	switch field.GoType {
+	// Resolve type aliases
+	resolvedType := g.registry.ResolveType(field.GoType)
+	needsCast := resolvedType != field.GoType
+
+	switch resolvedType {
 	case "uint8", "int8", "byte":
-		code.WriteString(fmt.Sprintf("\tp.buf[%d] = p.%s\n\n", start, field.Name))
+		if needsCast {
+			code.WriteString(fmt.Sprintf("\tp.buf[%d] = byte(p.%s)\n\n", start, field.Name))
+		} else {
+			code.WriteString(fmt.Sprintf("\tp.buf[%d] = p.%s\n\n", start, field.Name))
+		}
 
 	case "uint16":
-		code.WriteString(fmt.Sprintf("\t*(*uint16)(unsafe.Pointer(&p.buf[%d])) = p.%s\n\n",
-			start, field.Name))
+		if needsCast {
+			code.WriteString(fmt.Sprintf("\t*(*uint16)(unsafe.Pointer(&p.buf[%d])) = uint16(p.%s)\n\n",
+				start, field.Name))
+		} else {
+			code.WriteString(fmt.Sprintf("\t*(*uint16)(unsafe.Pointer(&p.buf[%d])) = p.%s\n\n",
+				start, field.Name))
+		}
 
 	case "int16":
-		code.WriteString(fmt.Sprintf("\t*(*int16)(unsafe.Pointer(&p.buf[%d])) = p.%s\n\n",
-			start, field.Name))
+		if needsCast {
+			code.WriteString(fmt.Sprintf("\t*(*int16)(unsafe.Pointer(&p.buf[%d])) = int16(p.%s)\n\n",
+				start, field.Name))
+		} else {
+			code.WriteString(fmt.Sprintf("\t*(*int16)(unsafe.Pointer(&p.buf[%d])) = p.%s\n\n",
+				start, field.Name))
+		}
 
 	case "uint32":
-		code.WriteString(fmt.Sprintf("\t*(*uint32)(unsafe.Pointer(&p.buf[%d])) = p.%s\n\n",
-			start, field.Name))
+		if needsCast {
+			code.WriteString(fmt.Sprintf("\t*(*uint32)(unsafe.Pointer(&p.buf[%d])) = uint32(p.%s)\n\n",
+				start, field.Name))
+		} else {
+			code.WriteString(fmt.Sprintf("\t*(*uint32)(unsafe.Pointer(&p.buf[%d])) = p.%s\n\n",
+				start, field.Name))
+		}
 
 	case "int32":
-		code.WriteString(fmt.Sprintf("\t*(*int32)(unsafe.Pointer(&p.buf[%d])) = p.%s\n\n",
-			start, field.Name))
+		if needsCast {
+			code.WriteString(fmt.Sprintf("\t*(*int32)(unsafe.Pointer(&p.buf[%d])) = int32(p.%s)\n\n",
+				start, field.Name))
+		} else {
+			code.WriteString(fmt.Sprintf("\t*(*int32)(unsafe.Pointer(&p.buf[%d])) = p.%s\n\n",
+				start, field.Name))
+		}
 
 	case "uint64":
-		code.WriteString(fmt.Sprintf("\t*(*uint64)(unsafe.Pointer(&p.buf[%d])) = p.%s\n\n",
-			start, field.Name))
+		if needsCast {
+			code.WriteString(fmt.Sprintf("\t*(*uint64)(unsafe.Pointer(&p.buf[%d])) = uint64(p.%s)\n\n",
+				start, field.Name))
+		} else {
+			code.WriteString(fmt.Sprintf("\t*(*uint64)(unsafe.Pointer(&p.buf[%d])) = p.%s\n\n",
+				start, field.Name))
+		}
 
 	case "int64":
-		code.WriteString(fmt.Sprintf("\t*(*int64)(unsafe.Pointer(&p.buf[%d])) = p.%s\n\n",
-			start, field.Name))
+		if needsCast {
+			code.WriteString(fmt.Sprintf("\t*(*int64)(unsafe.Pointer(&p.buf[%d])) = int64(p.%s)\n\n",
+				start, field.Name))
+		} else {
+			code.WriteString(fmt.Sprintf("\t*(*int64)(unsafe.Pointer(&p.buf[%d])) = p.%s\n\n",
+				start, field.Name))
+		}
 
 	default:
 		if strings.HasPrefix(field.GoType, "[") && strings.Contains(field.GoType, "]byte") {
