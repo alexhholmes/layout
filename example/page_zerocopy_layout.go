@@ -3,6 +3,7 @@
 package example
 
 import (
+	"io"
 	"unsafe"
 )
 
@@ -32,4 +33,51 @@ func (p *PageZeroCopy) SetFooter(v uint64) {
 	*(*uint64)(unsafe.Pointer(&p.buf[4088])) = v
 }
 
+func (p *PageZeroCopy) MarshalLayout() ([]byte, error) {
+	// Header: uint16 at [0, 2)
+	*(*uint16)(unsafe.Pointer(&p.buf[0])) = p.Header
+
+	// Body: []byte at [2, 4088)
+	// Body is already sliced from p.buf, no copy needed
+
+	// Footer: uint64 at [4088, 4096)
+	*(*uint64)(unsafe.Pointer(&p.buf[4088])) = p.Footer
+
+	return p.buf[:], nil
+}
+
+func (p *PageZeroCopy) UnmarshalLayout(buf []byte) error {
+	// Zero-copy mode: copy buf into p.buf if different
+	if len(buf) > 0 && len(p.buf) > 0 {
+		if &buf[0] != &p.buf[0] {
+			copy(p.buf[:], buf)
+		}
+	}
+
+	// Header: uint16 at [0, 2)
+	p.Header = *(*uint16)(unsafe.Pointer(&p.buf[0]))
+
+	// Body: []byte at [2, 4088)
+	p.Body = p.buf[2:4088]
+
+	// Footer: uint64 at [4088, 4096)
+	p.Footer = *(*uint64)(unsafe.Pointer(&p.buf[4088]))
+
+	return nil
+}
+
+func (p *PageZeroCopy) LoadFrom(r io.Reader) error {
+	if _, err := io.ReadFull(r, p.buf[:]); err != nil {
+		return err
+	}
+	return p.UnmarshalLayout(p.buf[:])
+}
+
+func (p *PageZeroCopy) WriteTo(w io.Writer) error {
+	if _, err := p.MarshalLayout(); err != nil {
+		return err
+	}
+	_, err := w.Write(p.buf[:])
+	return err
+}
 

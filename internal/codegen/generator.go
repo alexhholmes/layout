@@ -54,8 +54,8 @@ func NewGenerator(analyzed *analyzer.AnalyzedLayout, layout *parser.TypeLayout, 
 	}
 }
 
-// needsFmt returns true if zerocopy mode requires fmt package
-func (g *Generator) needsFmt() bool {
+// NeedsFmt returns true if zerocopy mode requires fmt package
+func (g *Generator) NeedsFmt() bool {
 	// Custom allocator needs fmt.Sprintf for panic
 	if g.allocator != "" {
 		return true
@@ -405,12 +405,23 @@ func (g *Generator) generateNewFunction() string {
 func (g *Generator) generateLoadFromHelper() string {
 	var code strings.Builder
 
+	// Check if buf is array-based (no allocator/alignment) or slice-based
+	isArrayBased := g.align == 0 && g.allocator == ""
+
 	// LoadFrom: read from io.Reader into p.buf
 	code.WriteString(fmt.Sprintf("func (p *%s) LoadFrom(r io.Reader) error {\n", g.analyzed.TypeName))
 	code.WriteString("\tif _, err := io.ReadFull(r, p.buf[:]); err != nil {\n")
 	code.WriteString("\t\treturn err\n")
 	code.WriteString("\t}\n")
-	code.WriteString("\treturn p.UnmarshalLayout(p.buf)\n")
+
+	if isArrayBased {
+		// Array-based: need to use [:] to pass as slice
+		code.WriteString("\treturn p.UnmarshalLayout(p.buf[:])\n")
+	} else {
+		// Slice-based: can pass p.buf directly
+		code.WriteString("\treturn p.UnmarshalLayout(p.buf)\n")
+	}
+
 	code.WriteString("}\n\n")
 
 	// WriteTo: marshal and write p.buf to io.Writer
@@ -1753,6 +1764,94 @@ func (g *Generator) generateRebuildIndirectSlices() string {
 
 	return code.String()
 }
+// generateZeroCopyMarshalMethod generates just the MarshalLayout method (without New)
+func (g *Generator) generateZeroCopyMarshalMethod() string {
+	var code strings.Builder
+
+	code.WriteString(fmt.Sprintf("func (p *%s) MarshalLayout() ([]byte, error) {\n", g.analyzed.TypeName))
+
+	// Generate code for each region, writing to p.buf
+	for _, region := range g.analyzed.Regions {
+		if region.Kind == analyzer.FixedRegion {
+			code.WriteString(g.generateFixedOp(region, "marshal"))
+		} else {
+			code.WriteString(g.generateZeroCopyDynamicMarshal(region))
+		}
+	}
+
+	code.WriteString("\treturn p.buf[:], nil\n")
+	code.WriteString("}\n")
+
+	return code.String()
+}
+
+// generateZeroCopyUnmarshalMethod generates UnmarshalLayout and helper methods (without New)
+func (g *Generator) generateZeroCopyUnmarshalMethod() string {
+	var code strings.Builder
+
+	// Check if buf is array-based (no allocator/alignment) or slice-based
+	isArrayBased := g.align == 0 && g.allocator == ""
+
+	// UnmarshalLayout: keep buf parameter for backward compatibility, but use p.buf
+	code.WriteString(fmt.Sprintf("func (p *%s) UnmarshalLayout(buf []byte) error {\n", g.analyzed.TypeName))
+	code.WriteString(fmt.Sprintf("\t// Zero-copy mode: copy buf into p.buf if different\n"))
+	code.WriteString("\tif len(buf) > 0 && len(p.buf) > 0 {\n")
+
+	if isArrayBased {
+		// Array-based: need to use [:] to get slice for comparison and copy
+		code.WriteString("\t\tif &buf[0] != &p.buf[0] {\n")
+		code.WriteString("\t\t\tcopy(p.buf[:], buf)\n")
+		code.WriteString("\t\t}\n")
+	} else {
+		// Slice-based: can use p.buf directly
+		code.WriteString("\t\tif &buf[0] != &p.buf[0] {\n")
+		code.WriteString("\t\t\tcopy(p.buf, buf)\n")
+		code.WriteString("\t\t}\n")
+	}
+
+	code.WriteString("\t}\n\n")
+
+	// Generate code for each region
+	for _, region := range g.analyzed.Regions {
+		if region.Kind == analyzer.FixedRegion {
+			code.WriteString(g.generateFixedOp(region, "unmarshal"))
+		} else {
+			code.WriteString(g.generateZeroCopyDynamicUnmarshal(region))
+		}
+	}
+
+	// Rebuild indirect slices from metadata
+	if g.layout != nil {
+		for _, field := range g.layout.Fields {
+			if field.Layout.From != "" {
+				code.WriteString(g.generateIndirectUnmarshal(field))
+			}
+		}
+	}
+
+	code.WriteString("\treturn nil\n")
+	code.WriteString("}\n\n")
+
+	// Add LoadFrom helper
+	code.WriteString(g.generateLoadFromHelper())
+
+	// Add RebuildIndirectSlices helper if there are indirect slices
+	if g.layout != nil {
+		hasIndirect := false
+		for _, field := range g.layout.Fields {
+			if field.Layout.From != "" {
+				hasIndirect = true
+				break
+			}
+		}
+		if hasIndirect {
+			code.WriteString(g.generateRebuildIndirectSlices())
+		}
+	}
+
+	return code.String()
+}
+
 // generateZeroCopyAccessors generates accessor-based zerocopy code
 func (g *Generator) generateZeroCopyAccessors() string {
 	var code strings.Builder
@@ -1784,6 +1883,11 @@ func (g *Generator) generateZeroCopyAccessors() string {
 			}
 		}
 	}
+
+	// Generate MarshalLayout and UnmarshalLayout for serialization
+	code.WriteString(g.generateZeroCopyMarshalMethod())
+	code.WriteString("\n")
+	code.WriteString(g.generateZeroCopyUnmarshalMethod())
 
 	return code.String()
 }

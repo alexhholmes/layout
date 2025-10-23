@@ -67,14 +67,42 @@ func generate(inputFile string) error {
 	packageName := extractPackageName(inputFile)
 	generated.WriteString(fmt.Sprintf("package %s\n\n", packageName))
 
-	// Check if any type uses zerocopy mode or copy mode
+	// Check if any type uses zerocopy mode or copy mode, and if fmt is needed
 	needsUnsafe := false
 	needsBinary := false
+	needsFmt := false
+	needsIo := false
+
 	for _, layout := range layouts {
+		analyzed, err := analyzer.Analyze(layout, registry)
+		if err != nil {
+			return fmt.Errorf("analyze %s: %w", layout.Name, err)
+		}
+
+		endian := "little"
+		if layout.Anno.Endian != "" {
+			endian = layout.Anno.Endian
+		}
+
+		mode := "copy"
+		if layout.Anno.Mode != "" {
+			mode = layout.Anno.Mode
+		}
+
+		align := layout.Anno.Align
+		allocator := layout.Anno.Allocator
+
+		gen := codegen.NewGenerator(analyzed, layout, layouts, registry, endian, mode, align, allocator)
+
 		if layout.Anno.Mode == "zerocopy" {
 			needsUnsafe = true
+			needsIo = true
+			if gen.NeedsFmt() {
+				needsFmt = true
+			}
 		} else {
 			needsBinary = true
+			needsFmt = true // copy mode always needs fmt
 		}
 	}
 
@@ -82,7 +110,12 @@ func generate(inputFile string) error {
 	generated.WriteString("import (\n")
 	if needsBinary {
 		generated.WriteString("\t\"encoding/binary\"\n")
+	}
+	if needsFmt {
 		generated.WriteString("\t\"fmt\"\n")
+	}
+	if needsIo {
+		generated.WriteString("\t\"io\"\n")
 	}
 	if needsUnsafe {
 		generated.WriteString("\t\"unsafe\"\n")
