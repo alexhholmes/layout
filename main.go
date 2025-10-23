@@ -74,8 +74,8 @@ func generate(inputFile string) error {
 	for _, layout := range layouts {
 		if layout.Anno.Mode == "zerocopy" {
 			needsUnsafe = true
-			// Need fmt for panic in allocator validation
-			if layout.Anno.Align > 0 {
+			// Need fmt for panic in custom allocator validation
+			if layout.Anno.Allocator != "" {
 				needsFmt = true
 			}
 		} else {

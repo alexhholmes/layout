@@ -18,6 +18,9 @@ func NewPageAligned() *PageAligned {
 	
 	// Slice aligned region
 	p.buf = p.backing[offset : offset+4096]
+	
+	// Initialize dynamic slices
+	p.Body = p.buf[2:2:4088]
 	return p
 }
 
@@ -34,7 +37,14 @@ func (p *PageAligned) MarshalLayout() ([]byte, error) {
 	return p.buf[:], nil
 }
 
-func (p *PageAligned) UnmarshalLayout() error {
+func (p *PageAligned) UnmarshalLayout(buf []byte) error {
+	// Zero-copy mode: copy buf into p.buf if different
+	if len(buf) > 0 && len(p.buf) > 0 {
+		if &buf[0] != &p.buf[0] {
+			copy(p.buf, buf)
+		}
+	}
+
 	// Header: uint16 at [0, 2)
 	p.Header = *(*uint16)(unsafe.Pointer(&p.buf[0]))
 
@@ -51,7 +61,7 @@ func (p *PageAligned) LoadFrom(r io.Reader) error {
 	if _, err := io.ReadFull(r, p.buf[:]); err != nil {
 		return err
 	}
-	return p.UnmarshalLayout()
+	return p.UnmarshalLayout(p.buf)
 }
 
 func (p *PageAligned) WriteTo(w io.Writer) error {
