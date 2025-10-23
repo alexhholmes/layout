@@ -1639,14 +1639,16 @@ func (g *Generator) generateRebuildIndirectSlices() string {
 				firstFrom, field.Layout.SizeField, sizeType, sizeVar))
 		}
 
-		// Restore non-indirect metadata fields
+		// Restore non-indirect metadata fields (only if saved element exists)
 		if len(preserveFields) > 0 {
 			code.WriteString("\n")
+			code.WriteString(fmt.Sprintf("\t\t// Restore non-indirect fields (only if saved element exists)\n"))
+			code.WriteString(fmt.Sprintf("\t\tif i < len(saved%s) {\n", metadataRegion.Field.Name))
 			for _, fieldName := range preserveFields {
-				code.WriteString(fmt.Sprintf("\t\t// Restore %s\n", fieldName))
-				code.WriteString(fmt.Sprintf("\t\tp.%s[i].%s = saved%s[i].%s\n",
+				code.WriteString(fmt.Sprintf("\t\t\tp.%s[i].%s = saved%s[i].%s\n",
 					firstFrom, fieldName, metadataRegion.Field.Name, fieldName))
 			}
+			code.WriteString("\t\t}\n")
 		}
 
 		code.WriteString("\t}\n")
