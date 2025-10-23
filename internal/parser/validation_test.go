@@ -97,7 +97,7 @@ type Page struct {
 	Body    []byte
 }`,
 			wantError: true,
-			errMsg:    "buf field must be []byte when using align, got [4096]byte",
+			errMsg:    "buf field must be []byte when using align or allocator, got [4096]byte",
 		},
 	}
 

@@ -3,48 +3,33 @@
 package example
 
 import (
-	"io"
 	"unsafe"
 )
 
-func (p *PageZeroCopy) MarshalLayout() ([]byte, error) {
-	// Header: uint16 at [0, 2)
-	*(*uint16)(unsafe.Pointer(&p.buf[0])) = p.Header
-
-	// Body: []byte at [2, 4088)
-	// Body is already sliced from p.buf, no copy needed
-
-	// Footer: uint64 at [4088, 4096)
-	*(*uint64)(unsafe.Pointer(&p.buf[4088])) = p.Footer
-
-	return p.buf[:], nil
+// Clone creates a copy of the PageZeroCopy
+func (p *PageZeroCopy) Clone() *PageZeroCopy {
+	clone := *p
+	return &clone
 }
 
-func (p *PageZeroCopy) UnmarshalLayout() error {
-	// Header: uint16 at [0, 2)
-	p.Header = *(*uint16)(unsafe.Pointer(&p.buf[0]))
-
-	// Body: []byte at [2, 4088)
-	p.Body = p.buf[2:4088]
-
-	// Footer: uint64 at [4088, 4096)
-	p.Footer = *(*uint64)(unsafe.Pointer(&p.buf[4088]))
-
-	return nil
+// GetHeader returns uint16 at offset 0
+func (p *PageZeroCopy) GetHeader() uint16 {
+	return *(*uint16)(unsafe.Pointer(&p.buf[0]))
 }
 
-func (p *PageZeroCopy) LoadFrom(r io.Reader) error {
-	if _, err := io.ReadFull(r, p.buf[:]); err != nil {
-		return err
-	}
-	return p.UnmarshalLayout()
+// SetHeader sets uint16 at offset 0
+func (p *PageZeroCopy) SetHeader(v uint16) {
+	*(*uint16)(unsafe.Pointer(&p.buf[0])) = v
 }
 
-func (p *PageZeroCopy) WriteTo(w io.Writer) error {
-	if _, err := p.MarshalLayout(); err != nil {
-		return err
-	}
-	_, err := w.Write(p.buf[:])
-	return err
+// GetFooter returns uint64 at offset 4088
+func (p *PageZeroCopy) GetFooter() uint64 {
+	return *(*uint64)(unsafe.Pointer(&p.buf[4088]))
 }
+
+// SetFooter sets uint64 at offset 4088
+func (p *PageZeroCopy) SetFooter(v uint64) {
+	*(*uint64)(unsafe.Pointer(&p.buf[4088])) = v
+}
+
 

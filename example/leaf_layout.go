@@ -79,6 +79,7 @@ func (p *LeafHeader) UnmarshalLayout(buf []byte) error {
 
 func (p *LeafNode) MarshalLayout() ([]byte, error) {
 	buf := make([]byte, 4096)
+	var offset int
 
 	// Header: LeafHeader at [0, 16)
 	elemBuf, err := p.Header.MarshalLayout()
@@ -88,7 +89,7 @@ func (p *LeafNode) MarshalLayout() ([]byte, error) {
 	copy(buf[0:16], elemBuf)
 
 	// Elements: []LeafElement at [16, 4088) with count=Header.NumKeys (element size: 8)
-	offset := 16
+	offset = 16
 	if len(p.Elements) != int(p.Header.NumKeys) {
 		return nil, fmt.Errorf("Elements length mismatch: have %d, want %d", len(p.Elements), p.Header.NumKeys)
 	}

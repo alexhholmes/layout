@@ -357,18 +357,15 @@ func (g *Generator) generateNewFunction() string {
 	} else {
 		// No alignment, direct allocation
 		if g.allocator != "" {
-			// Custom allocator with validation
+			// Custom allocator with validation - use buffer directly without backing
 			code.WriteString(fmt.Sprintf("\t// IMPORTANT: %s() must return a buffer of at least %d bytes\n", g.allocator, g.analyzed.BufferSize))
-			code.WriteString(fmt.Sprintf("\tp.backing = %s()\n", g.allocator))
+			code.WriteString(fmt.Sprintf("\tp.buf = %s()\n", g.allocator))
 			code.WriteString("\t\n")
 			code.WriteString("\t// Validate buffer size to prevent out-of-bounds access\n")
-			code.WriteString(fmt.Sprintf("\tif len(p.backing) < %d {\n", g.analyzed.BufferSize))
-			code.WriteString(fmt.Sprintf("\t\tpanic(fmt.Sprintf(\"%s returned buffer of %%d bytes, need at least %d\", len(p.backing)))\n",
+			code.WriteString(fmt.Sprintf("\tif len(p.buf) < %d {\n", g.analyzed.BufferSize))
+			code.WriteString(fmt.Sprintf("\t\tpanic(fmt.Sprintf(\"%s returned buffer of %%d bytes, need at least %d\", len(p.buf)))\n",
 				g.allocator, g.analyzed.BufferSize))
 			code.WriteString("\t}\n")
-			code.WriteString("\t\n")
-			code.WriteString("\t// Use buffer directly (no alignment required)\n")
-			code.WriteString(fmt.Sprintf("\tp.buf = p.backing[:%d]\n", g.analyzed.BufferSize))
 		} else {
 			// This shouldn't happen as we only call this function if align > 0 or allocator != ""
 			// But handle it anyway for completeness
@@ -1760,9 +1757,11 @@ func (g *Generator) generateRebuildIndirectSlices() string {
 func (g *Generator) generateZeroCopyAccessors() string {
 	var code strings.Builder
 
-	// Generate New<Type>() constructor
-	code.WriteString(g.generateNewFunction())
-	code.WriteString("\n")
+	// Generate New<Type>() constructor only when using dynamic allocation
+	if g.align > 0 || g.allocator != "" {
+		code.WriteString(g.generateNewFunction())
+		code.WriteString("\n")
+	}
 
 	// Generate Clone() helper
 	code.WriteString(g.generateClone())
@@ -1795,9 +1794,17 @@ func (g *Generator) generateClone() string {
 
 	code.WriteString(fmt.Sprintf("// Clone creates a copy of the %s\n", g.analyzed.TypeName))
 	code.WriteString(fmt.Sprintf("func (p *%s) Clone() *%s {\n", g.analyzed.TypeName, g.analyzed.TypeName))
-	code.WriteString(fmt.Sprintf("\tclone := New%s()\n", g.analyzed.TypeName))
-	code.WriteString("\tcopy(clone.buf, p.buf)\n")
-	code.WriteString("\treturn clone\n")
+
+	if g.align > 0 || g.allocator != "" {
+		// Dynamic allocation: use New function
+		code.WriteString(fmt.Sprintf("\tclone := New%s()\n", g.analyzed.TypeName))
+		code.WriteString("\tcopy(clone.buf, p.buf)\n")
+		code.WriteString("\treturn clone\n")
+	} else {
+		// Array-based: direct struct copy (copies array)
+		code.WriteString("\tclone := *p\n")
+		code.WriteString("\treturn &clone\n")
+	}
 	code.WriteString("}\n")
 
 	return code.String()
@@ -1903,7 +1910,20 @@ func (g *Generator) generateDynamicAccessors(region analyzer.Region) string {
 	// Generate count getter
 	code.WriteString(fmt.Sprintf("// Get%sCount returns the number of %s elements\n", field.Name, field.Name))
 	code.WriteString(fmt.Sprintf("func (p *%s) Get%sCount() int {\n", g.analyzed.TypeName, field.Name))
-	code.WriteString(fmt.Sprintf("\treturn int(p.Get%s())\n", countField))
+
+	// Handle nested field access (e.g., "Header.NumKeys")
+	if strings.Contains(countField, ".") {
+		parts := strings.Split(countField, ".")
+		// First part is the struct getter, rest is field access
+		code.WriteString(fmt.Sprintf("\treturn int(p.Get%s()", parts[0]))
+		for i := 1; i < len(parts); i++ {
+			code.WriteString(fmt.Sprintf(".%s", parts[i]))
+		}
+		code.WriteString(")\n")
+	} else {
+		// Simple field
+		code.WriteString(fmt.Sprintf("\treturn int(p.Get%s())\n", countField))
+	}
 	code.WriteString("}\n\n")
 
 	// Generate element getter
@@ -1961,14 +1981,14 @@ func (g *Generator) generateIndirectAccessors(field parser.Field) string {
 	code.WriteString("\t}\n")
 	code.WriteString(fmt.Sprintf("\telem := p.Get%sAt(idx)\n", metadataRegion.Field.Name))
 
-	// Calculate elementsEnd for offset adjustment
-	code.WriteString(fmt.Sprintf("\telementsEnd := %d + p.Get%sCount()*%d\n",
-		metadataRegion.Start, metadataRegion.Field.Name, metadataRegion.ElementSize))
-
 	// Handle offset mode
 	if field.Layout.OffsetMode == "absolute" {
+		// Absolute mode: offset is from page start, use directly
 		code.WriteString(fmt.Sprintf("\tstart := int(elem.%s)\n", field.Layout.OffsetField))
 	} else {
+		// Relative mode: offset is relative to data region, need to add elementsEnd
+		code.WriteString(fmt.Sprintf("\telementsEnd := %d + p.Get%sCount()*%d\n",
+			metadataRegion.Start, metadataRegion.Field.Name, metadataRegion.ElementSize))
 		code.WriteString(fmt.Sprintf("\tstart := elementsEnd + int(elem.%s)\n", field.Layout.OffsetField))
 	}
 
@@ -1988,13 +2008,14 @@ func (g *Generator) generateIndirectAccessors(field parser.Field) string {
 	code.WriteString("\t\tpanic(\"size mismatch: use Update instead of SetInPlace\")\n")
 	code.WriteString("\t}\n")
 
-	// Calculate start position
-	code.WriteString(fmt.Sprintf("\telementsEnd := %d + p.Get%sCount()*%d\n",
-		metadataRegion.Start, metadataRegion.Field.Name, metadataRegion.ElementSize))
-
+	// Calculate start position based on offset mode
 	if field.Layout.OffsetMode == "absolute" {
+		// Absolute mode: offset is from page start, use directly
 		code.WriteString(fmt.Sprintf("\tstart := int(elem.%s)\n", field.Layout.OffsetField))
 	} else {
+		// Relative mode: offset is relative to data region, need to add elementsEnd
+		code.WriteString(fmt.Sprintf("\telementsEnd := %d + p.Get%sCount()*%d\n",
+			metadataRegion.Start, metadataRegion.Field.Name, metadataRegion.ElementSize))
 		code.WriteString(fmt.Sprintf("\tstart := elementsEnd + int(elem.%s)\n", field.Layout.OffsetField))
 	}
 
