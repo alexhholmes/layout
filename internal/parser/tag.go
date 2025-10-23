@@ -38,6 +38,7 @@ type FieldLayout struct {
 	OffsetField string // Field in element that holds offset (e.g., "KeyOffset")
 	SizeField   string // Field in element that holds size (e.g., "KeySize")
 	Region      string // Region field that this slices into (e.g., "Data")
+	OffsetMode  string // "relative" (default) or "absolute" - how offsets are stored
 }
 
 // ParseTag parses layout struct tags
@@ -161,11 +162,12 @@ func parseDirection(s string) (PackDirection, error) {
 	}
 }
 
-// parseIndirectSlice parses indirect slice tags: from=X,offset=Y,size=Z,region=W
+// parseIndirectSlice parses indirect slice tags: from=X,offset=Y,size=Z,region=W[,offsetmode=M]
 func parseIndirectSlice(parts []string) (*FieldLayout, error) {
 	f := &FieldLayout{
-		Offset:  -1,
-		StartAt: -1,
+		Offset:     -1,
+		StartAt:    -1,
+		OffsetMode: "relative", // Default to relative for backwards compatibility
 	}
 
 	// Parse all key=value pairs
@@ -184,6 +186,11 @@ func parseIndirectSlice(parts []string) (*FieldLayout, error) {
 			f.SizeField = kv[1]
 		case "region":
 			f.Region = kv[1]
+		case "offsetmode":
+			if kv[1] != "relative" && kv[1] != "absolute" {
+				return nil, fmt.Errorf("offsetmode must be 'relative' or 'absolute', got: %s", kv[1])
+			}
+			f.OffsetMode = kv[1]
 		default:
 			return nil, fmt.Errorf("unknown indirect slice parameter: %s", kv[0])
 		}

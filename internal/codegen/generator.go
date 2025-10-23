@@ -1445,7 +1445,16 @@ func (g *Generator) generateIndirectUnmarshal(field parser.Field) string {
 	code.WriteString(fmt.Sprintf("\tfor i := range p.%s {\n", field.Layout.From))
 	code.WriteString(fmt.Sprintf("\t\toffset := int(p.%s[i].%s)\n", field.Layout.From, field.Layout.OffsetField))
 	code.WriteString(fmt.Sprintf("\t\tsize := int(p.%s[i].%s)\n", field.Layout.From, field.Layout.SizeField))
-	code.WriteString(fmt.Sprintf("\t\tp.%s[i] = p.%s[offset:offset+size]\n", field.Name, field.Layout.Region))
+
+	// Handle absolute vs relative offset mode
+	if field.Layout.OffsetMode == "absolute" {
+		code.WriteString("\t\t// Offset is absolute from page start, adjust to region-relative\n")
+		code.WriteString("\t\tregionOffset := offset - elementsEnd\n")
+		code.WriteString(fmt.Sprintf("\t\tp.%s[i] = p.%s[regionOffset:regionOffset+size]\n", field.Name, field.Layout.Region))
+	} else {
+		// Default: relative mode (backwards compatible)
+		code.WriteString(fmt.Sprintf("\t\tp.%s[i] = p.%s[offset:offset+size]\n", field.Name, field.Layout.Region))
+	}
 	code.WriteString("\t}\n\n")
 
 	return code.String()
@@ -1656,8 +1665,18 @@ func (g *Generator) generateRebuildIndirectSlices() string {
 			code.WriteString(fmt.Sprintf("\t\t%s := len(p.%s[i])\n", sizeVar, field.Name))
 			code.WriteString(fmt.Sprintf("\t\toffset -= %s\n", sizeVar))
 			code.WriteString(fmt.Sprintf("\t\tcopy(p.buf[offset:offset+%s], p.%s[i])\n", sizeVar, field.Name))
-			code.WriteString(fmt.Sprintf("\t\tp.%s[i].%s = %s(offset - elementsEnd)\n",
-				firstFrom, field.Layout.OffsetField, offsetType))
+
+			// Store offset based on offset mode
+			if field.Layout.OffsetMode == "absolute" {
+				// Store absolute offset from page start
+				code.WriteString(fmt.Sprintf("\t\tp.%s[i].%s = %s(offset)\n",
+					firstFrom, field.Layout.OffsetField, offsetType))
+			} else {
+				// Store region-relative offset (default, backwards compatible)
+				code.WriteString(fmt.Sprintf("\t\tp.%s[i].%s = %s(offset - elementsEnd)\n",
+					firstFrom, field.Layout.OffsetField, offsetType))
+			}
+
 			code.WriteString(fmt.Sprintf("\t\tp.%s[i].%s = %s(%s)\n",
 				firstFrom, field.Layout.SizeField, sizeType, sizeVar))
 		}
