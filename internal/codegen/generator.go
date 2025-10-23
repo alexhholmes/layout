@@ -186,8 +186,8 @@ func (g *Generator) generateCopyMarshal() string {
 func (g *Generator) generateZeroCopyMarshal() string {
 	var code strings.Builder
 
-	// Generate New function if alignment required (at top)
-	if g.align > 0 {
+	// Generate New function if alignment or custom allocator required (at top)
+	if g.align > 0 || g.allocator != "" {
 		code.WriteString(g.generateNewFunction())
 		code.WriteString("\n")
 	}
@@ -307,40 +307,65 @@ func (g *Generator) generateZeroCopyUnmarshal() string {
 	return code.String()
 }
 
-// generateNewFunction generates New<TypeName>() constructor for aligned buffer allocation
+// generateNewFunction generates New<TypeName>() constructor for buffer allocation
 func (g *Generator) generateNewFunction() string {
 	var code strings.Builder
-	requiredSize := g.analyzed.BufferSize + g.align - 1
 
 	code.WriteString(fmt.Sprintf("func New%s() *%s {\n", g.analyzed.TypeName, g.analyzed.TypeName))
 	code.WriteString(fmt.Sprintf("\tp := &%s{}\n", g.analyzed.TypeName))
 
-	if g.allocator != "" {
-		// Custom allocator with validation
-		code.WriteString(fmt.Sprintf("\t// IMPORTANT: %s() must return a buffer of at least %d bytes\n", g.allocator, requiredSize))
-		code.WriteString(fmt.Sprintf("\t// (%d bytes for data + %d bytes for %d-byte alignment)\n",
-			g.analyzed.BufferSize, g.align-1, g.align))
-		code.WriteString(fmt.Sprintf("\tp.backing = %s()\n", g.allocator))
-		code.WriteString("\t\n")
-		code.WriteString("\t// Validate buffer size to prevent out-of-bounds access\n")
-		code.WriteString(fmt.Sprintf("\tif len(p.backing) < %d {\n", requiredSize))
-		code.WriteString(fmt.Sprintf("\t\tpanic(fmt.Sprintf(\"%s returned buffer of %%d bytes, need at least %d\", len(p.backing)))\n",
-			g.allocator, requiredSize))
-		code.WriteString("\t}\n")
-	} else {
-		// Default allocation
-		code.WriteString(fmt.Sprintf("\t// Allocate %d + %d to guarantee %d-byte alignment\n",
-			g.analyzed.BufferSize, g.align-1, g.align))
-		code.WriteString(fmt.Sprintf("\tp.backing = make([]byte, %d)\n", requiredSize))
-	}
+	if g.align > 0 {
+		// Aligned allocation
+		requiredSize := g.analyzed.BufferSize + g.align - 1
 
-	code.WriteString("\t\n")
-	code.WriteString(fmt.Sprintf("\t// Find %d-byte aligned offset\n", g.align))
-	code.WriteString("\taddr := uintptr(unsafe.Pointer(&p.backing[0]))\n")
-	code.WriteString(fmt.Sprintf("\toffset := int(((addr + %d) &^ %d) - addr)\n", g.align-1, g.align-1))
-	code.WriteString("\t\n")
-	code.WriteString("\t// Slice aligned region\n")
-	code.WriteString(fmt.Sprintf("\tp.buf = p.backing[offset : offset+%d]\n", g.analyzed.BufferSize))
+		if g.allocator != "" {
+			// Custom allocator with validation
+			code.WriteString(fmt.Sprintf("\t// IMPORTANT: %s() must return a buffer of at least %d bytes\n", g.allocator, requiredSize))
+			code.WriteString(fmt.Sprintf("\t// (%d bytes for data + %d bytes for %d-byte alignment)\n",
+				g.analyzed.BufferSize, g.align-1, g.align))
+			code.WriteString(fmt.Sprintf("\tp.backing = %s()\n", g.allocator))
+			code.WriteString("\t\n")
+			code.WriteString("\t// Validate buffer size to prevent out-of-bounds access\n")
+			code.WriteString(fmt.Sprintf("\tif len(p.backing) < %d {\n", requiredSize))
+			code.WriteString(fmt.Sprintf("\t\tpanic(fmt.Sprintf(\"%s returned buffer of %%d bytes, need at least %d\", len(p.backing)))\n",
+				g.allocator, requiredSize))
+			code.WriteString("\t}\n")
+		} else {
+			// Default allocation
+			code.WriteString(fmt.Sprintf("\t// Allocate %d + %d to guarantee %d-byte alignment\n",
+				g.analyzed.BufferSize, g.align-1, g.align))
+			code.WriteString(fmt.Sprintf("\tp.backing = make([]byte, %d)\n", requiredSize))
+		}
+
+		code.WriteString("\t\n")
+		code.WriteString(fmt.Sprintf("\t// Find %d-byte aligned offset\n", g.align))
+		code.WriteString("\taddr := uintptr(unsafe.Pointer(&p.backing[0]))\n")
+		code.WriteString(fmt.Sprintf("\toffset := int(((addr + %d) &^ %d) - addr)\n", g.align-1, g.align-1))
+		code.WriteString("\t\n")
+		code.WriteString("\t// Slice aligned region\n")
+		code.WriteString(fmt.Sprintf("\tp.buf = p.backing[offset : offset+%d]\n", g.analyzed.BufferSize))
+	} else {
+		// No alignment, direct allocation
+		if g.allocator != "" {
+			// Custom allocator with validation
+			code.WriteString(fmt.Sprintf("\t// IMPORTANT: %s() must return a buffer of at least %d bytes\n", g.allocator, g.analyzed.BufferSize))
+			code.WriteString(fmt.Sprintf("\tp.backing = %s()\n", g.allocator))
+			code.WriteString("\t\n")
+			code.WriteString("\t// Validate buffer size to prevent out-of-bounds access\n")
+			code.WriteString(fmt.Sprintf("\tif len(p.backing) < %d {\n", g.analyzed.BufferSize))
+			code.WriteString(fmt.Sprintf("\t\tpanic(fmt.Sprintf(\"%s returned buffer of %%d bytes, need at least %d\", len(p.backing)))\n",
+				g.allocator, g.analyzed.BufferSize))
+			code.WriteString("\t}\n")
+			code.WriteString("\t\n")
+			code.WriteString("\t// Use buffer directly (no alignment required)\n")
+			code.WriteString(fmt.Sprintf("\tp.buf = p.backing[:%d]\n", g.analyzed.BufferSize))
+		} else {
+			// This shouldn't happen as we only call this function if align > 0 or allocator != ""
+			// But handle it anyway for completeness
+			code.WriteString(fmt.Sprintf("\tp.backing = make([]byte, %d)\n", g.analyzed.BufferSize))
+			code.WriteString(fmt.Sprintf("\tp.buf = p.backing\n"))
+		}
+	}
 
 	// Initialize dynamic []byte fields with len=0, cap=max
 	code.WriteString("\t\n")
