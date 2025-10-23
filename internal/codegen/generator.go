@@ -1400,10 +1400,9 @@ func (g *Generator) generateIndirectUnmarshal(field parser.Field) string {
 				   region.Direction == parser.StartEnd &&
 				   region.ElementType != "byte" &&
 				   region.Field.Name == field.Layout.From {
-					countFieldName := strings.Split(region.Field.Layout.CountField, ".")[len(strings.Split(region.Field.Layout.CountField, "."))-1]
 					code.WriteString(fmt.Sprintf("\t// Initialize %s data region after metadata\n", field.Layout.Region))
 					code.WriteString(fmt.Sprintf("\telementsEnd := %d + int(p.%s)*%d\n",
-						region.Start, countFieldName, region.ElementSize))
+						region.Start, region.Field.Layout.CountField, region.ElementSize))
 					code.WriteString(fmt.Sprintf("\tp.%s = p.buf[elementsEnd:%d]\n\n", field.Layout.Region, g.analyzed.BufferSize))
 					break
 				}
@@ -1538,7 +1537,7 @@ func (g *Generator) generateRebuildIndirectSlices() string {
 	code.WriteString(fmt.Sprintf("\t// Calculate where %s ends\n", metadataRegion.Field.Name))
 	code.WriteString(fmt.Sprintf("\telementsEnd := %d + int(p.%s)*%d\n",
 		metadataRegion.Start,
-		strings.Split(metadataRegion.Field.Layout.CountField, ".")[len(strings.Split(metadataRegion.Field.Layout.CountField, "."))-1],
+		metadataRegion.Field.Layout.CountField,
 		metadataRegion.ElementSize))
 
 	// Initialize Data buffer after Elements
@@ -1549,16 +1548,16 @@ func (g *Generator) generateRebuildIndirectSlices() string {
 	code.WriteString(fmt.Sprintf("\t\n\t// Rebuild %s array\n", metadataRegion.Field.Name))
 	code.WriteString(fmt.Sprintf("\tif cap(p.%s) >= int(p.%s) {\n",
 		metadataRegion.Field.Name,
-		strings.Split(metadataRegion.Field.Layout.CountField, ".")[len(strings.Split(metadataRegion.Field.Layout.CountField, "."))-1]))
+		metadataRegion.Field.Layout.CountField))
 	code.WriteString(fmt.Sprintf("\t\tp.%s = p.%s[:p.%s]\n",
 		metadataRegion.Field.Name,
 		metadataRegion.Field.Name,
-		strings.Split(metadataRegion.Field.Layout.CountField, ".")[len(strings.Split(metadataRegion.Field.Layout.CountField, "."))-1]))
+		metadataRegion.Field.Layout.CountField))
 	code.WriteString("\t} else {\n")
 	code.WriteString(fmt.Sprintf("\t\tp.%s = make([]%s, p.%s)\n",
 		metadataRegion.Field.Name,
 		metadataRegion.ElementType,
-		strings.Split(metadataRegion.Field.Layout.CountField, ".")[len(strings.Split(metadataRegion.Field.Layout.CountField, "."))-1]))
+		metadataRegion.Field.Layout.CountField))
 	code.WriteString("\t}\n")
 
 	// Pack all indirect slices into Data backward from the end
