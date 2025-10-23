@@ -186,11 +186,9 @@ func (g *Generator) generateCopyMarshal() string {
 func (g *Generator) generateZeroCopyMarshal() string {
 	var code strings.Builder
 
-	// Generate New function if alignment or custom allocator required (at top)
-	if g.align > 0 || g.allocator != "" {
-		code.WriteString(g.generateNewFunction())
-		code.WriteString("\n")
-	}
+	// Generate New function for zerocopy mode (always required for buffer management)
+	code.WriteString(g.generateNewFunction())
+	code.WriteString("\n")
 
 	code.WriteString(fmt.Sprintf("func (p *%s) MarshalLayout() ([]byte, error) {\n", g.analyzed.TypeName))
 
