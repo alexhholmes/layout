@@ -67,17 +67,12 @@ func generate(inputFile string) error {
 	packageName := extractPackageName(inputFile)
 	generated.WriteString(fmt.Sprintf("package %s\n\n", packageName))
 
-	// Check if any type uses zerocopy mode or has allocator
+	// Check if any type uses zerocopy mode or copy mode
 	needsUnsafe := false
 	needsBinary := false
-	needsFmt := false
 	for _, layout := range layouts {
 		if layout.Anno.Mode == "zerocopy" {
 			needsUnsafe = true
-			// Need fmt for panic in custom allocator validation
-			if layout.Anno.Allocator != "" {
-				needsFmt = true
-			}
 		} else {
 			needsBinary = true
 		}
@@ -90,10 +85,6 @@ func generate(inputFile string) error {
 		generated.WriteString("\t\"fmt\"\n")
 	}
 	if needsUnsafe {
-		if needsFmt && !needsBinary {
-			generated.WriteString("\t\"fmt\"\n")
-		}
-		generated.WriteString("\t\"io\"\n")
 		generated.WriteString("\t\"unsafe\"\n")
 	}
 	generated.WriteString(")\n\n")
@@ -131,14 +122,12 @@ func generate(inputFile string) error {
 
 		gen := codegen.NewGenerator(analyzed, layout, layouts, registry, endian, mode, align, allocator)
 
-		// Generate marshal
-		marshal := gen.GenerateMarshal()
-		generated.WriteString(marshal)
-		generated.WriteString("\n")
-
-		// Generate unmarshal
-		unmarshal := gen.GenerateUnmarshal()
-		generated.WriteString(unmarshal)
+		// Generate code (marshal/unmarshal for copy mode, accessors for zerocopy mode)
+		code, err := gen.Generate()
+		if err != nil {
+			return fmt.Errorf("generate %s: %w", layout.Name, err)
+		}
+		generated.WriteString(code)
 		generated.WriteString("\n")
 
 		generatedTypes = append(generatedTypes, layout.Name)
