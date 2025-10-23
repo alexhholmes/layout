@@ -1574,11 +1574,14 @@ func (g *Generator) generateRebuildIndirectSlices() string {
 		}
 	}
 
+	// Determine count field from first indirect field (used in multiple places)
+	var firstFrom string
+	if len(indirectFields) > 0 {
+		firstFrom = indirectFields[0].Layout.From
+	}
+
 	// Generate packing code: pack all fields for each element together
 	if len(indirectFields) > 0 {
-		// Determine count field from first indirect field
-		firstFrom := indirectFields[0].Layout.From
-
 		code.WriteString(fmt.Sprintf("\t\n\t// Pack all indirect slices backward from end (elements in forward order)\n"))
 		code.WriteString(fmt.Sprintf("\tfor i := 0; i < len(p.%s); i++ {\n", indirectFields[0].Name))
 
@@ -1599,6 +1602,21 @@ func (g *Generator) generateRebuildIndirectSlices() string {
 				firstFrom, field.Layout.SizeField, sizeType, sizeVar))
 		}
 
+		code.WriteString("\t}\n")
+	}
+
+	// Rebuild indirect slices as views into Data buffer
+	code.WriteString("\t\n\t// Rebuild indirect slices as views into Data buffer\n")
+	for _, field := range indirectFields {
+		code.WriteString(fmt.Sprintf("\tif cap(p.%s) >= len(p.%s) {\n", field.Name, firstFrom))
+		code.WriteString(fmt.Sprintf("\t\tp.%s = p.%s[:len(p.%s)]\n", field.Name, field.Name, firstFrom))
+		code.WriteString("\t} else {\n")
+		code.WriteString(fmt.Sprintf("\t\tp.%s = make([][]byte, len(p.%s))\n", field.Name, firstFrom))
+		code.WriteString("\t}\n")
+		code.WriteString(fmt.Sprintf("\tfor i := range p.%s {\n", firstFrom))
+		code.WriteString(fmt.Sprintf("\t\toffset := int(p.%s[i].%s)\n", firstFrom, field.Layout.OffsetField))
+		code.WriteString(fmt.Sprintf("\t\tsize := int(p.%s[i].%s)\n", firstFrom, field.Layout.SizeField))
+		code.WriteString(fmt.Sprintf("\t\tp.%s[i] = p.Data[offset:offset+size]\n", field.Name))
 		code.WriteString("\t}\n")
 	}
 
