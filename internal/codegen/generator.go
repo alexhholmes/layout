@@ -1828,17 +1828,17 @@ func (g *Generator) generateFixedAccessors(region analyzer.Region) string {
 	case "int8":
 		code.WriteString(fmt.Sprintf("\treturn int8(p.buf[%d])\n", start))
 	case "uint16":
-		code.WriteString(fmt.Sprintf("\treturn *(*uint16)(unsafe.Pointer(&p.buf[%d]))\n", start))
+		code.WriteString(fmt.Sprintf("\treturn *(*%s)(unsafe.Pointer(&p.buf[%d]))\n", field.GoType, start))
 	case "int16":
-		code.WriteString(fmt.Sprintf("\treturn *(*int16)(unsafe.Pointer(&p.buf[%d]))\n", start))
+		code.WriteString(fmt.Sprintf("\treturn *(*%s)(unsafe.Pointer(&p.buf[%d]))\n", field.GoType, start))
 	case "uint32":
-		code.WriteString(fmt.Sprintf("\treturn *(*uint32)(unsafe.Pointer(&p.buf[%d]))\n", start))
+		code.WriteString(fmt.Sprintf("\treturn *(*%s)(unsafe.Pointer(&p.buf[%d]))\n", field.GoType, start))
 	case "int32":
-		code.WriteString(fmt.Sprintf("\treturn *(*int32)(unsafe.Pointer(&p.buf[%d]))\n", start))
+		code.WriteString(fmt.Sprintf("\treturn *(*%s)(unsafe.Pointer(&p.buf[%d]))\n", field.GoType, start))
 	case "uint64":
-		code.WriteString(fmt.Sprintf("\treturn *(*uint64)(unsafe.Pointer(&p.buf[%d]))\n", start))
+		code.WriteString(fmt.Sprintf("\treturn *(*%s)(unsafe.Pointer(&p.buf[%d]))\n", field.GoType, start))
 	case "int64":
-		code.WriteString(fmt.Sprintf("\treturn *(*int64)(unsafe.Pointer(&p.buf[%d]))\n", start))
+		code.WriteString(fmt.Sprintf("\treturn *(*%s)(unsafe.Pointer(&p.buf[%d]))\n", field.GoType, start))
 	default:
 		// Handle arrays and structs
 		if strings.HasPrefix(field.GoType, "[") && strings.Contains(field.GoType, "]byte") {
@@ -1865,17 +1865,17 @@ func (g *Generator) generateFixedAccessors(region analyzer.Region) string {
 	case "int8":
 		code.WriteString(fmt.Sprintf("\tp.buf[%d] = byte(v)\n", start))
 	case "uint16":
-		code.WriteString(fmt.Sprintf("\t*(*uint16)(unsafe.Pointer(&p.buf[%d])) = v\n", start))
+		code.WriteString(fmt.Sprintf("\t*(*%s)(unsafe.Pointer(&p.buf[%d])) = v\n", field.GoType, start))
 	case "int16":
-		code.WriteString(fmt.Sprintf("\t*(*int16)(unsafe.Pointer(&p.buf[%d])) = v\n", start))
+		code.WriteString(fmt.Sprintf("\t*(*%s)(unsafe.Pointer(&p.buf[%d])) = v\n", field.GoType, start))
 	case "uint32":
-		code.WriteString(fmt.Sprintf("\t*(*uint32)(unsafe.Pointer(&p.buf[%d])) = v\n", start))
+		code.WriteString(fmt.Sprintf("\t*(*%s)(unsafe.Pointer(&p.buf[%d])) = v\n", field.GoType, start))
 	case "int32":
-		code.WriteString(fmt.Sprintf("\t*(*int32)(unsafe.Pointer(&p.buf[%d])) = v\n", start))
+		code.WriteString(fmt.Sprintf("\t*(*%s)(unsafe.Pointer(&p.buf[%d])) = v\n", field.GoType, start))
 	case "uint64":
-		code.WriteString(fmt.Sprintf("\t*(*uint64)(unsafe.Pointer(&p.buf[%d])) = v\n", start))
+		code.WriteString(fmt.Sprintf("\t*(*%s)(unsafe.Pointer(&p.buf[%d])) = v\n", field.GoType, start))
 	case "int64":
-		code.WriteString(fmt.Sprintf("\t*(*int64)(unsafe.Pointer(&p.buf[%d])) = v\n", start))
+		code.WriteString(fmt.Sprintf("\t*(*%s)(unsafe.Pointer(&p.buf[%d])) = v\n", field.GoType, start))
 	default:
 		// Handle arrays and structs
 		if strings.HasPrefix(field.GoType, "[") && strings.Contains(field.GoType, "]byte") {
