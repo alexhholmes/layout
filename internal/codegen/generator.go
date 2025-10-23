@@ -1654,6 +1654,10 @@ func (g *Generator) generateRebuildIndirectSlices() string {
 		code.WriteString("\t}\n")
 	}
 
+	// Update Data to span the full packed region
+	code.WriteString("\t\n\t// Update Data to span full packed region\n")
+	code.WriteString(fmt.Sprintf("\tp.%s = p.buf[elementsEnd:%d]\n", dataRegion.Field.Name, g.analyzed.BufferSize))
+
 	// Rebuild indirect slices as views into Data buffer
 	code.WriteString("\t\n\t// Rebuild indirect slices as views into Data buffer\n")
 	for _, field := range indirectFields {
