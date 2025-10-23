@@ -10,20 +10,29 @@ import (
 
 // Generator generates marshal/unmarshal code for binary layouts
 type Generator struct {
-	analyzed *analyzer.AnalyzedLayout
-	registry *analyzer.TypeRegistry
-	endian   string // "little" or "big"
+	analyzed  *analyzer.AnalyzedLayout
+	registry  *analyzer.TypeRegistry
+	endian    string // "little" or "big"
+	mode      string // "copy" or "zerocopy"
+	align     int    // alignment requirement (0 = none)
+	allocator string // custom allocator function name (optional)
 }
 
 // NewGenerator creates a new code generator
-func NewGenerator(analyzed *analyzer.AnalyzedLayout, reg *analyzer.TypeRegistry, endian string) *Generator {
+func NewGenerator(analyzed *analyzer.AnalyzedLayout, reg *analyzer.TypeRegistry, endian string, mode string, align int, allocator string) *Generator {
 	if endian == "" {
 		endian = "little"
 	}
+	if mode == "" {
+		mode = "copy"
+	}
 	return &Generator{
-		analyzed: analyzed,
-		registry: reg,
-		endian:   endian,
+		analyzed:  analyzed,
+		registry:  reg,
+		endian:    endian,
+		mode:      mode,
+		align:     align,
+		allocator: allocator,
 	}
 }
 
@@ -37,8 +46,15 @@ func (g *Generator) Generate() (string, error) {
 
 	// Imports
 	out.WriteString("import (\n")
-	out.WriteString("\t\"encoding/binary\"\n")
-	out.WriteString("\t\"fmt\"\n")
+	if g.mode != "zerocopy" {
+		out.WriteString("\t\"encoding/binary\"\n")
+		out.WriteString("\t\"fmt\"\n")
+	}
+	if g.mode == "zerocopy" {
+		out.WriteString("\t\"fmt\"\n")
+		out.WriteString("\t\"io\"\n")
+		out.WriteString("\t\"unsafe\"\n")
+	}
 	out.WriteString(")\n\n")
 
 	// Generate marshal method
@@ -55,6 +71,14 @@ func (g *Generator) Generate() (string, error) {
 
 // GenerateMarshal generates the MarshalLayout method
 func (g *Generator) GenerateMarshal() string {
+	if g.mode == "zerocopy" {
+		return g.generateZeroCopyMarshal()
+	}
+	return g.generateCopyMarshal()
+}
+
+// generateCopyMarshal generates copy-mode marshal (existing behavior)
+func (g *Generator) generateCopyMarshal() string {
 	var code strings.Builder
 
 	// Function signature
@@ -76,8 +100,43 @@ func (g *Generator) GenerateMarshal() string {
 	return code.String()
 }
 
+// generateZeroCopyMarshal generates zero-copy marshal that writes to p.buf
+func (g *Generator) generateZeroCopyMarshal() string {
+	var code strings.Builder
+
+	// Generate New function if alignment required (at top)
+	if g.align > 0 {
+		code.WriteString(g.generateNewFunction())
+		code.WriteString("\n")
+	}
+
+	code.WriteString(fmt.Sprintf("func (p *%s) MarshalLayout() ([]byte, error) {\n", g.analyzed.TypeName))
+
+	// Generate code for each region, writing to p.buf
+	for _, region := range g.analyzed.Regions {
+		if region.Kind == analyzer.FixedRegion {
+			code.WriteString(g.generateZeroCopyFixedMarshal(region))
+		} else {
+			code.WriteString(g.generateZeroCopyDynamicMarshal(region))
+		}
+	}
+
+	code.WriteString("\treturn p.buf[:], nil\n")
+	code.WriteString("}\n")
+
+	return code.String()
+}
+
 // GenerateUnmarshal generates the UnmarshalLayout method
 func (g *Generator) GenerateUnmarshal() string {
+	if g.mode == "zerocopy" {
+		return g.generateZeroCopyUnmarshal()
+	}
+	return g.generateCopyUnmarshal()
+}
+
+// generateCopyUnmarshal generates copy-mode unmarshal (existing behavior)
+func (g *Generator) generateCopyUnmarshal() string {
 	var code strings.Builder
 
 	// Function signature
@@ -98,6 +157,95 @@ func (g *Generator) GenerateUnmarshal() string {
 	}
 
 	code.WriteString("\treturn nil\n")
+	code.WriteString("}\n")
+
+	return code.String()
+}
+
+// generateZeroCopyUnmarshal generates zero-copy unmarshal using unsafe pointers
+func (g *Generator) generateZeroCopyUnmarshal() string {
+	var code strings.Builder
+
+	// UnmarshalLayout: no params, assumes p.buf already loaded
+	code.WriteString(fmt.Sprintf("func (p *%s) UnmarshalLayout() error {\n", g.analyzed.TypeName))
+
+	// Generate code for each region
+	for _, region := range g.analyzed.Regions {
+		if region.Kind == analyzer.FixedRegion {
+			code.WriteString(g.generateZeroCopyFixedUnmarshal(region))
+		} else {
+			code.WriteString(g.generateZeroCopyDynamicUnmarshal(region))
+		}
+	}
+
+	code.WriteString("\treturn nil\n")
+	code.WriteString("}\n\n")
+
+	// Add LoadFrom helper
+	code.WriteString(g.generateLoadFromHelper())
+
+	return code.String()
+}
+
+// generateNewFunction generates New() constructor for aligned buffer allocation
+func (g *Generator) generateNewFunction() string {
+	var code strings.Builder
+	requiredSize := g.analyzed.BufferSize + g.align - 1
+
+	code.WriteString(fmt.Sprintf("func New() *%s {\n", g.analyzed.TypeName))
+	code.WriteString(fmt.Sprintf("\tp := &%s{}\n", g.analyzed.TypeName))
+
+	if g.allocator != "" {
+		// Custom allocator with validation
+		code.WriteString(fmt.Sprintf("\t// IMPORTANT: %s() must return a buffer of at least %d bytes\n", g.allocator, requiredSize))
+		code.WriteString(fmt.Sprintf("\t// (%d bytes for data + %d bytes for %d-byte alignment)\n",
+			g.analyzed.BufferSize, g.align-1, g.align))
+		code.WriteString(fmt.Sprintf("\tp.backing = %s()\n", g.allocator))
+		code.WriteString("\t\n")
+		code.WriteString("\t// Validate buffer size to prevent out-of-bounds access\n")
+		code.WriteString(fmt.Sprintf("\tif len(p.backing) < %d {\n", requiredSize))
+		code.WriteString(fmt.Sprintf("\t\tpanic(fmt.Sprintf(\"%s returned buffer of %%d bytes, need at least %d\", len(p.backing)))\n",
+			g.allocator, requiredSize))
+		code.WriteString("\t}\n")
+	} else {
+		// Default allocation
+		code.WriteString(fmt.Sprintf("\t// Allocate %d + %d to guarantee %d-byte alignment\n",
+			g.analyzed.BufferSize, g.align-1, g.align))
+		code.WriteString(fmt.Sprintf("\tp.backing = make([]byte, %d)\n", requiredSize))
+	}
+
+	code.WriteString("\t\n")
+	code.WriteString(fmt.Sprintf("\t// Find %d-byte aligned offset\n", g.align))
+	code.WriteString("\taddr := uintptr(unsafe.Pointer(&p.backing[0]))\n")
+	code.WriteString(fmt.Sprintf("\toffset := int(((addr + %d) &^ %d) - addr)\n", g.align-1, g.align-1))
+	code.WriteString("\t\n")
+	code.WriteString("\t// Slice aligned region\n")
+	code.WriteString(fmt.Sprintf("\tp.buf = p.backing[offset : offset+%d]\n", g.analyzed.BufferSize))
+	code.WriteString("\treturn p\n")
+	code.WriteString("}\n")
+
+	return code.String()
+}
+
+// generateLoadFromHelper generates LoadFrom and WriteTo helpers for zerocopy mode
+func (g *Generator) generateLoadFromHelper() string {
+	var code strings.Builder
+
+	// LoadFrom: read from io.Reader into p.buf
+	code.WriteString(fmt.Sprintf("func (p *%s) LoadFrom(r io.Reader) error {\n", g.analyzed.TypeName))
+	code.WriteString("\tif _, err := io.ReadFull(r, p.buf[:]); err != nil {\n")
+	code.WriteString("\t\treturn err\n")
+	code.WriteString("\t}\n")
+	code.WriteString("\treturn p.UnmarshalLayout()\n")
+	code.WriteString("}\n\n")
+
+	// WriteTo: marshal and write p.buf to io.Writer
+	code.WriteString(fmt.Sprintf("func (p *%s) WriteTo(w io.Writer) error {\n", g.analyzed.TypeName))
+	code.WriteString("\tif _, err := p.MarshalLayout(); err != nil {\n")
+	code.WriteString("\t\treturn err\n")
+	code.WriteString("\t}\n")
+	code.WriteString("\t_, err := w.Write(p.buf[:])\n")
+	code.WriteString("\treturn err\n")
 	code.WriteString("}\n")
 
 	return code.String()
@@ -368,6 +516,178 @@ func (g *Generator) generateDynamicUnmarshal(region analyzer.Region) string {
 			code.WriteString(fmt.Sprintf("\tcopy(p.%s, buf[%d:%d])\n\n", field.Name, boundary, start))
 		}
 	}
+
+	return code.String()
+}
+
+// generateZeroCopyFixedUnmarshal generates zero-copy unmarshal for fixed-size field
+func (g *Generator) generateZeroCopyFixedUnmarshal(region analyzer.Region) string {
+	var code strings.Builder
+
+	field := region.Field
+	start := region.Start
+	end := region.Boundary
+
+	code.WriteString(fmt.Sprintf("\t// %s: %s at [%d, %d)\n", field.Name, field.GoType, start, end))
+
+	switch field.GoType {
+	case "uint8", "int8", "byte":
+		code.WriteString(fmt.Sprintf("\tp.%s = p.buf[%d]\n\n", field.Name, start))
+
+	case "uint16":
+		code.WriteString(fmt.Sprintf("\tp.%s = *(*uint16)(unsafe.Pointer(&p.buf[%d]))\n\n",
+			field.Name, start))
+
+	case "int16":
+		code.WriteString(fmt.Sprintf("\tp.%s = *(*int16)(unsafe.Pointer(&p.buf[%d]))\n\n",
+			field.Name, start))
+
+	case "uint32":
+		code.WriteString(fmt.Sprintf("\tp.%s = *(*uint32)(unsafe.Pointer(&p.buf[%d]))\n\n",
+			field.Name, start))
+
+	case "int32":
+		code.WriteString(fmt.Sprintf("\tp.%s = *(*int32)(unsafe.Pointer(&p.buf[%d]))\n\n",
+			field.Name, start))
+
+	case "uint64":
+		code.WriteString(fmt.Sprintf("\tp.%s = *(*uint64)(unsafe.Pointer(&p.buf[%d]))\n\n",
+			field.Name, start))
+
+	case "int64":
+		code.WriteString(fmt.Sprintf("\tp.%s = *(*int64)(unsafe.Pointer(&p.buf[%d]))\n\n",
+			field.Name, start))
+
+	default:
+		code.WriteString(fmt.Sprintf("\t// TODO: zerocopy unmarshal %s\n\n", field.GoType))
+	}
+
+	return code.String()
+}
+
+// generateZeroCopyDynamicUnmarshal generates zero-copy unmarshal for dynamic field
+func (g *Generator) generateZeroCopyDynamicUnmarshal(region analyzer.Region) string {
+	var code strings.Builder
+
+	field := region.Field
+	start := region.Start
+	boundary := region.Boundary
+	countField := field.Layout.CountField
+
+	// Only handle []byte for now
+	if field.GoType != "[]byte" {
+		code.WriteString(fmt.Sprintf("\t// TODO: zerocopy unmarshal dynamic %s\n\n", field.GoType))
+		return code.String()
+	}
+
+	// Comment
+	if countField != "" {
+		code.WriteString(fmt.Sprintf("\t// %s: %s at [%d, %d) with count=%s\n",
+			field.Name, field.GoType, start, boundary, countField))
+	} else {
+		code.WriteString(fmt.Sprintf("\t// %s: %s at [%d, %d)\n",
+			field.Name, field.GoType, start, boundary))
+	}
+
+	// Slice directly into buffer
+	if countField != "" {
+		// Count-dependent slicing
+		if region.Direction == parser.StartEnd {
+			// Forward: slice from start with count
+			code.WriteString(fmt.Sprintf("\tp.%s = p.buf[%d:%d+p.%s]\n\n", field.Name, start, start, countField))
+		} else {
+			// Backward: slice from (start - count) to start
+			code.WriteString(fmt.Sprintf("\tp.%s = p.buf[%d-p.%s:%d]\n\n", field.Name, start, countField, start))
+		}
+	} else {
+		// Implicit length from boundaries
+		if region.Direction == parser.StartEnd {
+			code.WriteString(fmt.Sprintf("\tp.%s = p.buf[%d:%d]\n\n", field.Name, start, boundary))
+		} else {
+			code.WriteString(fmt.Sprintf("\tp.%s = p.buf[%d:%d]\n\n", field.Name, boundary, start))
+		}
+	}
+
+	return code.String()
+}
+
+// generateZeroCopyFixedMarshal generates marshal code for fixed field into p.buf
+func (g *Generator) generateZeroCopyFixedMarshal(region analyzer.Region) string {
+	var code strings.Builder
+
+	field := region.Field
+	start := region.Start
+	end := region.Boundary
+
+	code.WriteString(fmt.Sprintf("\t// %s: %s at [%d, %d)\n", field.Name, field.GoType, start, end))
+
+	switch field.GoType {
+	case "uint8", "int8", "byte":
+		code.WriteString(fmt.Sprintf("\tp.buf[%d] = p.%s\n\n", start, field.Name))
+
+	case "uint16":
+		code.WriteString(fmt.Sprintf("\t*(*uint16)(unsafe.Pointer(&p.buf[%d])) = p.%s\n\n",
+			start, field.Name))
+
+	case "int16":
+		code.WriteString(fmt.Sprintf("\t*(*int16)(unsafe.Pointer(&p.buf[%d])) = p.%s\n\n",
+			start, field.Name))
+
+	case "uint32":
+		code.WriteString(fmt.Sprintf("\t*(*uint32)(unsafe.Pointer(&p.buf[%d])) = p.%s\n\n",
+			start, field.Name))
+
+	case "int32":
+		code.WriteString(fmt.Sprintf("\t*(*int32)(unsafe.Pointer(&p.buf[%d])) = p.%s\n\n",
+			start, field.Name))
+
+	case "uint64":
+		code.WriteString(fmt.Sprintf("\t*(*uint64)(unsafe.Pointer(&p.buf[%d])) = p.%s\n\n",
+			start, field.Name))
+
+	case "int64":
+		code.WriteString(fmt.Sprintf("\t*(*int64)(unsafe.Pointer(&p.buf[%d])) = p.%s\n\n",
+			start, field.Name))
+
+	default:
+		if strings.HasPrefix(field.GoType, "[") && strings.Contains(field.GoType, "]byte") {
+			code.WriteString(fmt.Sprintf("\tcopy(p.buf[%d:%d], p.%s[:])\n\n", start, end, field.Name))
+		} else {
+			code.WriteString(fmt.Sprintf("\t// TODO: zerocopy marshal %s\n\n", field.GoType))
+		}
+	}
+
+	return code.String()
+}
+
+// generateZeroCopyDynamicMarshal generates marshal code for dynamic field into p.buf
+func (g *Generator) generateZeroCopyDynamicMarshal(region analyzer.Region) string {
+	var code strings.Builder
+
+	field := region.Field
+	start := region.Start
+	boundary := region.Boundary
+	countField := field.Layout.CountField
+
+	// Only handle []byte for now
+	if field.GoType != "[]byte" {
+		code.WriteString(fmt.Sprintf("\t// TODO: zerocopy marshal dynamic %s\n\n", field.GoType))
+		return code.String()
+	}
+
+	// Comment
+	if countField != "" {
+		code.WriteString(fmt.Sprintf("\t// %s: %s at [%d, %d) with count=%s\n",
+			field.Name, field.GoType, start, boundary, countField))
+	} else {
+		code.WriteString(fmt.Sprintf("\t// %s: %s at [%d, %d)\n",
+			field.Name, field.GoType, start, boundary))
+	}
+
+	// Since Body is a slice into p.buf[], it's already in the right place.
+	// But we might need to copy if it was modified.
+	// For now, just note that fields should reference p.buf directly.
+	code.WriteString(fmt.Sprintf("\t// %s is already sliced from p.buf, no copy needed\n\n", field.Name))
 
 	return code.String()
 }

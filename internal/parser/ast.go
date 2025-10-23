@@ -56,6 +56,13 @@ func extractTypes(file *ast.File) []*TypeLayout {
 				continue // No @layout, skip this type
 			}
 
+			// Validate struct has required fields for zerocopy mode
+			if err := validateStructFields(structType, anno); err != nil {
+				// TODO: collect errors instead of skipping
+				fmt.Printf("Warning: %s: %v\n", typeSpec.Name.Name, err)
+				continue
+			}
+
 			// Extract fields with layout tags
 			fields := extractFields(structType)
 			if len(fields) == 0 {
@@ -92,6 +99,57 @@ func extractAnnotation(doc *ast.CommentGroup) *TypeAnnotation {
 	}
 
 	return anno
+}
+
+// validateStructFields checks that struct has required fields based on annotation
+func validateStructFields(structType *ast.StructType, anno *TypeAnnotation) error {
+	if anno.Mode != "zerocopy" {
+		return nil // No special requirements for copy mode
+	}
+
+	// Extract all field names and types (not just ones with layout tags)
+	fieldMap := make(map[string]string)
+	for _, field := range structType.Fields.List {
+		if len(field.Names) == 0 {
+			continue // Embedded field
+		}
+		fieldName := field.Names[0].Name
+		fieldType := typeToString(field.Type)
+		fieldMap[fieldName] = fieldType
+	}
+
+	// Zerocopy with alignment requires backing and buf fields
+	if anno.Align > 0 {
+		// Check for backing []byte
+		backingType, hasBackingField := fieldMap["backing"]
+		if !hasBackingField {
+			return fmt.Errorf("zerocopy mode with align=%d requires field: backing []byte", anno.Align)
+		}
+		if backingType != "[]byte" {
+			return fmt.Errorf("backing field must be []byte, got %s", backingType)
+		}
+
+		// Check for buf []byte
+		bufType, hasBufField := fieldMap["buf"]
+		if !hasBufField {
+			return fmt.Errorf("zerocopy mode with align=%d requires field: buf []byte", anno.Align)
+		}
+		if bufType != "[]byte" {
+			return fmt.Errorf("buf field must be []byte when using align, got %s", bufType)
+		}
+	} else {
+		// Zerocopy without alignment requires buf [size]byte
+		bufType, hasBufField := fieldMap["buf"]
+		if !hasBufField {
+			return fmt.Errorf("zerocopy mode requires field: buf [%d]byte", anno.Size)
+		}
+		expectedType := fmt.Sprintf("[%d]byte", anno.Size)
+		if bufType != expectedType {
+			return fmt.Errorf("buf field must be %s, got %s", expectedType, bufType)
+		}
+	}
+
+	return nil
 }
 
 func extractFields(structType *ast.StructType) []Field {

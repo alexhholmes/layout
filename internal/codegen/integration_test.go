@@ -82,7 +82,7 @@ func TestIntegrationSimplePage(t *testing.T) {
 	}
 
 	// Generate code
-	gen := NewGenerator(analyzed, reg, "little")
+	gen := NewGenerator(analyzed, reg, "little", "copy", 0, "")
 	code, err := gen.Generate()
 	if err != nil {
 		t.Fatalf("Generate failed: %v", err)
@@ -170,7 +170,7 @@ func TestIntegrationWithCountField(t *testing.T) {
 		t.Fatalf("Analyze failed: %v", err)
 	}
 
-	gen := NewGenerator(analyzed, reg, "little")
+	gen := NewGenerator(analyzed, reg, "little", "copy", 0, "")
 	code, err := gen.Generate()
 	if err != nil {
 		t.Fatalf("Generate failed: %v", err)
@@ -243,7 +243,7 @@ func TestIntegrationBackwardGrowth(t *testing.T) {
 		t.Errorf("Keys boundary should be 2, got %d", keysRegion.Boundary)
 	}
 
-	gen := NewGenerator(analyzed, reg, "little")
+	gen := NewGenerator(analyzed, reg, "little", "copy", 0, "")
 	code, err := gen.Generate()
 	if err != nil {
 		t.Fatalf("Generate failed: %v", err)

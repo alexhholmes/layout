@@ -8,8 +8,11 @@ Built for B-tree pages, database records, network protocols - anywhere you need 
 
 - **Bidirectional packing**: Fixed fields, forward-growing regions (`start-end`), backward-growing regions (`end-start`)
 - **Zero-allocation unmarshaling**: Buffer reuse via capacity checks (5.5x faster)
-- **Compile-time layout validation**: Collision detection, boundary calculation, count field validation
-- **Type-safe generated code**: No reflection, no unsafe, pure `encoding/binary`
+- **True zero-copy mode**: Direct memory access with `unsafe.Pointer`, no allocations
+- **Aligned buffers**: Generate aligned buffers for O_DIRECT I/O (512/4096-byte alignment)
+- **Custom allocators**: Integrate with buffer pools via `allocator=` annotation
+- **Compile-time layout validation**: Collision detection, boundary calculation, count field validation, struct field requirements
+- **Type-safe generated code**: `encoding/binary` or `unsafe` depending on mode
 
 ## Quick Start
 
@@ -118,6 +121,167 @@ type Record struct { ... }
 Parameters:
 - `size=N`: Buffer size in bytes (required)
 - `endian=little|big`: Byte order (default: little)
+- `mode=copy|zerocopy`: Marshal/unmarshal mode (default: copy)
+- `align=N`: Buffer alignment in bytes (power of 2, requires mode=zerocopy)
+- `allocator=FuncName`: Custom allocator function (requires mode=zerocopy with align)
+
+## Zero-Copy Mode
+
+True zero-copy I/O: no allocations, slice directly into embedded buffer.
+
+### Basic Zero-Copy
+
+```go
+// @layout size=4096 mode=zerocopy
+type Page struct {
+    buf    [4096]byte  // Required: fixed-size buffer
+    Header uint16      `layout:"@0"`
+    Body   []byte      `layout:"start-end"`
+    Footer uint64      `layout:"@4088"`
+}
+```
+
+**Required field**: `buf [size]byte` matching annotation size
+
+**Generated methods**:
+```go
+func (p *Page) MarshalLayout() ([]byte, error)   // Writes to p.buf using unsafe
+func (p *Page) UnmarshalLayout() error            // Reads from p.buf, no params
+func (p *Page) LoadFrom(r io.Reader) error        // Helper: read then unmarshal
+func (p *Page) WriteTo(w io.Writer) error         // Helper: marshal then write
+```
+
+**Usage**:
+```go
+page := &Page{}
+
+// Direct load: complete control
+n, err := io.ReadFull(disk, page.buf[:])
+page.UnmarshalLayout()
+
+// Or use helper
+page.LoadFrom(disk)
+```
+
+**Performance**: No allocations, direct memory access via `unsafe.Pointer`.
+
+### Zero-Copy with Alignment
+
+For O_DIRECT I/O requiring aligned buffers:
+
+```go
+// @layout size=4096 mode=zerocopy align=512
+type Page struct {
+    backing []byte  // Required: over-allocated buffer
+    buf     []byte  // Required: aligned slice
+    Header  uint16  `layout:"@0"`
+    Body    []byte  `layout:"start-end"`
+    Footer  uint64  `layout:"@4088"`
+}
+```
+
+**Required fields**:
+- `backing []byte` - Over-allocated buffer for alignment
+- `buf []byte` - Slice into aligned region
+
+**Generated constructor**:
+```go
+func New() *Page {
+    p := &Page{}
+    // Allocate size + (align-1) to guarantee alignment
+    p.backing = make([]byte, 4607)  // 4096 + 511
+
+    // Find 512-byte aligned offset
+    addr := uintptr(unsafe.Pointer(&p.backing[0]))
+    offset := int(((addr + 511) &^ 511) - addr)
+
+    // Slice aligned region
+    p.buf = p.backing[offset : offset+4096]
+    return p
+}
+```
+
+**Usage**:
+```go
+page := New()  // Allocates aligned buffer
+
+// Open file with O_DIRECT
+file, _ := os.OpenFile("data.db", os.O_RDWR|syscall.O_DIRECT, 0644)
+
+// Direct I/O - no kernel buffering
+io.ReadFull(file, page.buf[:])
+page.UnmarshalLayout()
+
+// Modify and write back
+page.Header = 42
+page.MarshalLayout()
+file.Write(page.buf[:])
+```
+
+### Custom Allocator
+
+Use buffer pools with custom allocators:
+
+```go
+var pagePool = sync.Pool{
+    New: func() interface{} {
+        // Allocate 4096 + 511 for 512-byte alignment
+        return make([]byte, 4607)
+    },
+}
+
+func AllocateAlignedPage() []byte {
+    return pagePool.Get().([]byte)
+}
+
+// @layout size=4096 mode=zerocopy align=512 allocator=AllocateAlignedPage
+type Page struct {
+    backing []byte
+    buf     []byte
+    Header  uint16 `layout:"@0"`
+    Body    []byte `layout:"start-end"`
+    Footer  uint64 `layout:"@4088"`
+}
+```
+
+**Generated code includes validation**:
+```go
+func New() *Page {
+    p := &Page{}
+    // IMPORTANT: AllocateAlignedPage() must return a buffer of at least 4607 bytes
+    // (4096 bytes for data + 511 bytes for 512-byte alignment)
+    p.backing = AllocateAlignedPage()
+
+    // Validate buffer size to prevent out-of-bounds access
+    if len(p.backing) < 4607 {
+        panic(fmt.Sprintf("AllocateAlignedPage returned buffer of %d bytes, need at least 4607", len(p.backing)))
+    }
+
+    // Find aligned offset...
+}
+```
+
+**Usage**:
+```go
+page := New()  // Gets buffer from pool
+
+// Use page...
+io.ReadFull(disk, page.buf[:])
+page.UnmarshalLayout()
+
+// Return to pool when done
+pagePool.Put(page.backing)
+```
+
+### Field Requirements by Mode
+
+| Mode | Alignment | Required Fields |
+|------|-----------|-----------------|
+| `copy` | N/A | None (generated code allocates) |
+| `zerocopy` | None | `buf [size]byte` |
+| `zerocopy` | Yes | `backing []byte` + `buf []byte` |
+
+**Validation**: Parser checks struct has required fields, prints warning if missing.
 
 ## Supported Types
 
@@ -208,8 +372,6 @@ page.UnmarshalLayout(diskBuf1)  // No allocation
 page.UnmarshalLayout(diskBuf2)  // No allocation
 page.UnmarshalLayout(diskBuf3)  // No allocation
 ```
-
-**Performance**: 5.5x faster, zero allocations (see `BUFFER_REUSE.md`)
 
 ## Examples
 
@@ -338,27 +500,17 @@ go test ./...
 - Code generation (14 unit tests)
 - Integration tests (3 end-to-end)
 
-## Performance
-
-**Unmarshal benchmark** (4KB page):
-```
-Without reuse:  2500 ns/op   4096 B/op   1 allocs/op
-With reuse:      450 ns/op      0 B/op   0 allocs/op
-```
-
-5.5x faster, zero allocations.
-
 ## Limitations
 
 Current:
 - Only `[]byte` for dynamic fields (no `[]StructType` yet)
 - Single buffer per type (no nested layouts)
-- No padding/alignment control
+- Zero-copy mode uses `unsafe` (not compatible with all Go security settings)
 
 Planned:
 - `[]StructType` with inline marshaling
 - Nested struct support
-- Explicit alignment directives
+- Field-level alignment/padding control
 
 ## Design
 

@@ -9,8 +9,11 @@ import (
 
 // TypeAnnotation holds parsed @layout annotation
 type TypeAnnotation struct {
-	Size   int    // Buffer size in bytes
-	Endian string // "little" or "big"
+	Size      int    // Buffer size in bytes
+	Endian    string // "little" or "big"
+	Mode      string // "copy" or "zerocopy"
+	Align     int    // Alignment in bytes (0 = no alignment requirement)
+	Allocator string // Custom allocator function name (optional)
 }
 
 // ParseAnnotation parses @layout annotation from comment text
@@ -36,6 +39,7 @@ func ParseAnnotation(comment string) (*TypeAnnotation, error) {
 func parseLayoutParams(params string) (*TypeAnnotation, error) {
 	anno := &TypeAnnotation{
 		Endian: "little", // Default
+		Mode:   "copy",   // Default
 	}
 
 	// Extract key=value pairs: "size=4096 endian=big"
@@ -68,6 +72,25 @@ func parseLayoutParams(params string) (*TypeAnnotation, error) {
 				return nil, fmt.Errorf("endian must be 'little' or 'big', got: %s", value)
 			}
 			anno.Endian = value
+
+		case "mode":
+			if value != "copy" && value != "zerocopy" {
+				return nil, fmt.Errorf("mode must be 'copy' or 'zerocopy', got: %s", value)
+			}
+			anno.Mode = value
+
+		case "align":
+			align, err := strconv.Atoi(value)
+			if err != nil {
+				return nil, fmt.Errorf("invalid align value: %s", value)
+			}
+			if align <= 0 || (align&(align-1)) != 0 {
+				return nil, fmt.Errorf("align must be a power of 2, got: %d", align)
+			}
+			anno.Align = align
+
+		case "allocator":
+			anno.Allocator = value
 
 		default:
 			return nil, fmt.Errorf("unknown parameter: %s", key)

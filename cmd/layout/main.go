@@ -56,10 +56,35 @@ func generate(inputFile string) error {
 	packageName := extractPackageName(inputFile)
 	generated.WriteString(fmt.Sprintf("package %s\n\n", packageName))
 
+	// Check if any type uses zerocopy mode or has allocator
+	needsUnsafe := false
+	needsBinary := false
+	needsFmt := false
+	for _, layout := range layouts {
+		if layout.Anno.Mode == "zerocopy" {
+			needsUnsafe = true
+			// Need fmt for panic in allocator validation
+			if layout.Anno.Align > 0 {
+				needsFmt = true
+			}
+		} else {
+			needsBinary = true
+		}
+	}
+
 	// Imports
 	generated.WriteString("import (\n")
-	generated.WriteString("\t\"encoding/binary\"\n")
-	generated.WriteString("\t\"fmt\"\n")
+	if needsBinary {
+		generated.WriteString("\t\"encoding/binary\"\n")
+		generated.WriteString("\t\"fmt\"\n")
+	}
+	if needsUnsafe {
+		if needsFmt && !needsBinary {
+			generated.WriteString("\t\"fmt\"\n")
+		}
+		generated.WriteString("\t\"io\"\n")
+		generated.WriteString("\t\"unsafe\"\n")
+	}
 	generated.WriteString(")\n\n")
 
 	// Generate code for each type
@@ -79,7 +104,15 @@ func generate(inputFile string) error {
 			endian = layout.Anno.Endian
 		}
 
-		gen := codegen.NewGenerator(analyzed, registry, endian)
+		mode := "copy"
+		if layout.Anno.Mode != "" {
+			mode = layout.Anno.Mode
+		}
+
+		align := layout.Anno.Align
+		allocator := layout.Anno.Allocator
+
+		gen := codegen.NewGenerator(analyzed, registry, endian, mode, align, allocator)
 
 		// Generate marshal
 		marshal := gen.GenerateMarshal()
