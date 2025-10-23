@@ -512,15 +512,6 @@ Planned:
 - Nested struct support
 - Field-level alignment/padding control
 
-## Design
-
-See planning docs:
-- `Design.md` - Original spec
-- `ANALYZER_PLAN.md` - Layout analysis algorithm
-- `CODEGEN_PLAN.md` - Code generation strategy
-- `BUFFER_REUSE.md` - Zero-allocation optimization
-- `COUNT_SEMANTICS.md` - Count field rules
-
 ## License
 
 MIT

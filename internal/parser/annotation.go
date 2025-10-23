@@ -19,17 +19,27 @@ type TypeAnnotation struct {
 // ParseAnnotation parses @layout annotation from comment text
 //
 // Expected format:
+//   // @layout
 //   // @layout size=4096
 //   // @layout size=4096 endian=big
 //   // @layout size=8192 endian=little
 //
-// Params are space-separated key=value pairs
+// Params are space-separated key=value pairs. Size is optional and will be calculated from fields if not specified.
 func ParseAnnotation(comment string) (*TypeAnnotation, error) {
-	// Match: @layout <params>
-	re := regexp.MustCompile(`@layout\s+(.+)`)
+	// Match: @layout with optional params
+	re := regexp.MustCompile(`@layout(?:\s+(.+))?`)
 	matches := re.FindStringSubmatch(comment)
-	if len(matches) < 2 {
+	if len(matches) < 1 {
 		return nil, fmt.Errorf("no @layout annotation found")
+	}
+
+	// If no params, return default annotation with size=0 (calculate from fields)
+	if len(matches) < 2 || matches[1] == "" {
+		return &TypeAnnotation{
+			Endian: "little",
+			Mode:   "copy",
+			Size:   0,
+		}, nil
 	}
 
 	params := matches[1]
@@ -40,17 +50,19 @@ func parseLayoutParams(params string) (*TypeAnnotation, error) {
 	anno := &TypeAnnotation{
 		Endian: "little", // Default
 		Mode:   "copy",   // Default
+		Size:   0,        // 0 means calculate from fields
 	}
 
 	// Extract key=value pairs: "size=4096 endian=big"
-	pairRe := regexp.MustCompile(`(\w+)=(\w+)`)
+	// Allow negative numbers in values
+	pairRe := regexp.MustCompile(`(\w+)=([\w-]+)`)
 	pairs := pairRe.FindAllStringSubmatch(params, -1)
 
+	// Allow @layout with no parameters (size will be calculated)
 	if len(pairs) == 0 {
-		return nil, fmt.Errorf("no parameters found in: %s", params)
+		return anno, nil
 	}
 
-	foundSize := false
 	for _, pair := range pairs {
 		key := pair[1]
 		value := pair[2]
@@ -65,7 +77,6 @@ func parseLayoutParams(params string) (*TypeAnnotation, error) {
 				return nil, fmt.Errorf("size must be positive, got: %d", size)
 			}
 			anno.Size = size
-			foundSize = true
 
 		case "endian":
 			if value != "little" && value != "big" {
@@ -95,10 +106,6 @@ func parseLayoutParams(params string) (*TypeAnnotation, error) {
 		default:
 			return nil, fmt.Errorf("unknown parameter: %s", key)
 		}
-	}
-
-	if !foundSize {
-		return nil, fmt.Errorf("size parameter is required")
 	}
 
 	return anno, nil

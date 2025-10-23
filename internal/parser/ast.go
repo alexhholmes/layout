@@ -56,17 +56,27 @@ func extractTypes(file *ast.File) []*TypeLayout {
 				continue // No @layout, skip this type
 			}
 
+			// Extract fields with layout tags
+			fields := extractFields(structType)
+			if len(fields) == 0 {
+				continue // No layout tags, skip
+			}
+
+			// Calculate size from fields if not specified
+			if anno.Size == 0 {
+				calculatedSize := calculateSize(fields)
+				if calculatedSize == 0 {
+					fmt.Printf("Warning: %s: cannot calculate size (no fixed fields or only dynamic fields), size must be specified\n", typeSpec.Name.Name)
+					continue
+				}
+				anno.Size = calculatedSize
+			}
+
 			// Validate struct has required fields for zerocopy mode
 			if err := validateStructFields(structType, anno); err != nil {
 				// TODO: collect errors instead of skipping
 				fmt.Printf("Warning: %s: %v\n", typeSpec.Name.Name, err)
 				continue
-			}
-
-			// Extract fields with layout tags
-			fields := extractFields(structType)
-			if len(fields) == 0 {
-				continue // No layout tags, skip
 			}
 
 			types = append(types, &TypeLayout{
@@ -221,5 +231,65 @@ func exprToString(expr ast.Expr) string {
 		return e.Name
 	default:
 		return "?"
+	}
+}
+
+// calculateSize determines the minimum buffer size needed based on field offsets
+// Returns 0 if size cannot be determined (e.g., only dynamic fields)
+func calculateSize(fields []Field) int {
+	maxEnd := 0
+
+	for _, field := range fields {
+		// Only consider fixed fields for size calculation
+		if field.Layout.Direction != Fixed {
+			continue
+		}
+
+		// Get field size from type
+		fieldSize := getFixedTypeSize(field.GoType)
+		if fieldSize <= 0 {
+			// Can't determine size for this type (struct or unknown)
+			// For struct types, we'd need the registry, so skip for now
+			continue
+		}
+
+		endOffset := field.Layout.Offset + fieldSize
+		if endOffset > maxEnd {
+			maxEnd = endOffset
+		}
+	}
+
+	return maxEnd
+}
+
+// getFixedTypeSize returns the size in bytes for basic fixed-size types
+// Returns -1 for variable-size types (slices, unknown types)
+func getFixedTypeSize(goType string) int {
+	switch goType {
+	case "uint8", "int8", "byte", "bool":
+		return 1
+	case "uint16", "int16":
+		return 2
+	case "uint32", "int32", "float32":
+		return 4
+	case "uint64", "int64", "float64":
+		return 8
+	default:
+		// Check for fixed arrays like [16]byte
+		if strings.HasPrefix(goType, "[") && strings.Contains(goType, "]") {
+			// Parse [N]Type
+			parts := strings.Split(goType[1:], "]")
+			if len(parts) == 2 {
+				// parts[0] is the count, parts[1] is the element type
+				var count int
+				fmt.Sscanf(parts[0], "%d", &count)
+				elemSize := getFixedTypeSize(parts[1])
+				if elemSize > 0 {
+					return count * elemSize
+				}
+			}
+		}
+		// For structs or unknown types, return -1
+		return -1
 	}
 }

@@ -47,6 +47,12 @@ func generate(inputFile string) error {
 
 	// Analyze and generate for all types
 	registry := analyzer.NewTypeRegistry()
+
+	// First pass: register all types in the registry
+	for _, layout := range layouts {
+		registry.Register(layout.Name, layout.Anno.Size)
+	}
+
 	var generated strings.Builder
 
 	// File header
@@ -87,11 +93,17 @@ func generate(inputFile string) error {
 	}
 	generated.WriteString(")\n\n")
 
-	// Generate code for each type
+	// Second pass: generate code for each type
 	generatedTypes := []string{}
 	for _, layout := range layouts {
 		analyzed, err := analyzer.Analyze(layout, registry)
 		if err != nil {
+			// Print detailed errors for debugging
+			if analyzed != nil && len(analyzed.Errors) > 0 {
+				for _, e := range analyzed.Errors {
+					fmt.Fprintf(os.Stderr, "  Error: %s\n", e)
+				}
+			}
 			return fmt.Errorf("analyze %s: %w", layout.Name, err)
 		}
 

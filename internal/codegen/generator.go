@@ -287,7 +287,12 @@ func (g *Generator) generateFixedMarshal(region analyzer.Region) string {
 		if strings.HasPrefix(field.GoType, "[") && strings.Contains(field.GoType, "]byte") {
 			code.WriteString(fmt.Sprintf("\tcopy(buf[%d:%d], p.%s[:])\n\n", start, end, field.Name))
 		} else {
-			code.WriteString(fmt.Sprintf("\t// TODO: marshal %s\n\n", field.GoType))
+			// Handle struct types with MarshalLayout
+			code.WriteString(fmt.Sprintf("\telemBuf, err := p.%s.MarshalLayout()\n", field.Name))
+			code.WriteString("\tif err != nil {\n")
+			code.WriteString(fmt.Sprintf("\t\treturn nil, fmt.Errorf(\"marshal %s: %%w\", err)\n", field.Name))
+			code.WriteString("\t}\n")
+			code.WriteString(fmt.Sprintf("\tcopy(buf[%d:%d], elemBuf)\n\n", start, end))
 		}
 	}
 
@@ -330,7 +335,11 @@ func (g *Generator) generateFixedUnmarshal(region analyzer.Region) string {
 		if strings.HasPrefix(field.GoType, "[") && strings.Contains(field.GoType, "]byte") {
 			code.WriteString(fmt.Sprintf("\tcopy(p.%s[:], buf[%d:%d])\n\n", field.Name, start, end))
 		} else {
-			code.WriteString(fmt.Sprintf("\t// TODO: unmarshal %s\n\n", field.GoType))
+			// Handle struct types with UnmarshalLayout
+			code.WriteString(fmt.Sprintf("\tif err := p.%s.UnmarshalLayout(buf[%d:%d]); err != nil {\n",
+				field.Name, start, end))
+			code.WriteString(fmt.Sprintf("\t\treturn fmt.Errorf(\"unmarshal %s: %%w\", err)\n", field.Name))
+			code.WriteString("\t}\n\n")
 		}
 	}
 
@@ -387,18 +396,21 @@ func (g *Generator) endianPrefix() string {
 
 // generateDynamicMarshal generates marshal code for a dynamic field
 func (g *Generator) generateDynamicMarshal(region analyzer.Region) string {
+	// Check element type to determine marshal strategy
+	if region.ElementType == "byte" {
+		return g.generateByteMarshal(region)
+	}
+	return g.generateStructMarshal(region)
+}
+
+// generateByteMarshal generates byte-by-byte marshal for []byte
+func (g *Generator) generateByteMarshal(region analyzer.Region) string {
 	var code strings.Builder
 
 	field := region.Field
 	start := region.Start
 	boundary := region.Boundary
 	countField := field.Layout.CountField
-
-	// Only handle []byte for now
-	if field.GoType != "[]byte" {
-		code.WriteString(fmt.Sprintf("\t// TODO: marshal dynamic %s\n\n", field.GoType))
-		return code.String()
-	}
 
 	// Comment
 	if countField != "" {
@@ -454,20 +466,95 @@ func (g *Generator) generateDynamicMarshal(region analyzer.Region) string {
 	return code.String()
 }
 
-// generateDynamicUnmarshal generates unmarshal code for a dynamic field
-func (g *Generator) generateDynamicUnmarshal(region analyzer.Region) string {
+// generateStructMarshal generates element-by-element marshal for []StructType
+func (g *Generator) generateStructMarshal(region analyzer.Region) string {
 	var code strings.Builder
 
 	field := region.Field
 	start := region.Start
 	boundary := region.Boundary
 	countField := field.Layout.CountField
+	elementSize := region.ElementSize
 
-	// Only handle []byte for now
-	if field.GoType != "[]byte" {
-		code.WriteString(fmt.Sprintf("\t// TODO: unmarshal dynamic %s\n\n", field.GoType))
-		return code.String()
+	// Comment
+	if countField != "" {
+		code.WriteString(fmt.Sprintf("\t// %s: %s at [%d, %d) with count=%s (element size: %d)\n",
+			field.Name, field.GoType, start, boundary, countField, elementSize))
+	} else {
+		code.WriteString(fmt.Sprintf("\t// %s: %s at [%d, %d) (element size: %d)\n",
+			field.Name, field.GoType, start, boundary, elementSize))
 	}
+
+	if region.Direction == parser.StartEnd {
+		// Forward growth
+		code.WriteString(fmt.Sprintf("\toffset := %d\n", start))
+
+		// Count validation if count field exists
+		if countField != "" {
+			code.WriteString(fmt.Sprintf("\tif len(p.%s) != int(p.%s) {\n", field.Name, countField))
+			code.WriteString(fmt.Sprintf("\t\treturn nil, fmt.Errorf(\"%s length mismatch: have %%d, want %%d\", len(p.%s), p.%s)\n",
+				field.Name, field.Name, countField))
+			code.WriteString("\t}\n")
+		}
+
+		// Marshal loop for structs
+		code.WriteString(fmt.Sprintf("\tfor i := range p.%s {\n", field.Name))
+		code.WriteString(fmt.Sprintf("\t\tif offset + %d > %d {\n", elementSize, boundary))
+		code.WriteString(fmt.Sprintf("\t\t\treturn nil, fmt.Errorf(\"%s collision at offset %%d\", offset)\n", field.Name))
+		code.WriteString("\t\t}\n")
+		code.WriteString(fmt.Sprintf("\t\telemBuf, err := p.%s[i].MarshalLayout()\n", field.Name))
+		code.WriteString("\t\tif err != nil {\n")
+		code.WriteString(fmt.Sprintf("\t\t\treturn nil, fmt.Errorf(\"marshal %s[%%d]: %%w\", i, err)\n", field.Name))
+		code.WriteString("\t\t}\n")
+		code.WriteString(fmt.Sprintf("\t\tcopy(buf[offset:offset+%d], elemBuf)\n", elementSize))
+		code.WriteString(fmt.Sprintf("\t\toffset += %d\n", elementSize))
+		code.WriteString("\t}\n\n")
+	} else {
+		// Backward growth (end-start)
+		code.WriteString(fmt.Sprintf("\toffset := %d\n", start))
+
+		// Count validation if count field exists
+		if countField != "" {
+			code.WriteString(fmt.Sprintf("\tif len(p.%s) != int(p.%s) {\n", field.Name, countField))
+			code.WriteString(fmt.Sprintf("\t\treturn nil, fmt.Errorf(\"%s length mismatch: have %%d, want %%d\", len(p.%s), p.%s)\n",
+				field.Name, field.Name, countField))
+			code.WriteString("\t}\n")
+		}
+
+		// Marshal backward for structs
+		code.WriteString(fmt.Sprintf("\tfor i := len(p.%s) - 1; i >= 0; i-- {\n", field.Name))
+		code.WriteString(fmt.Sprintf("\t\toffset -= %d\n", elementSize))
+		code.WriteString(fmt.Sprintf("\t\tif offset < %d {\n", boundary))
+		code.WriteString(fmt.Sprintf("\t\t\treturn nil, fmt.Errorf(\"%s collision at offset %%d\", offset)\n", field.Name))
+		code.WriteString("\t\t}\n")
+		code.WriteString(fmt.Sprintf("\t\telemBuf, err := p.%s[i].MarshalLayout()\n", field.Name))
+		code.WriteString("\t\tif err != nil {\n")
+		code.WriteString(fmt.Sprintf("\t\t\treturn nil, fmt.Errorf(\"marshal %s[%%d]: %%w\", i, err)\n", field.Name))
+		code.WriteString("\t\t}\n")
+		code.WriteString(fmt.Sprintf("\t\tcopy(buf[offset:offset+%d], elemBuf)\n", elementSize))
+		code.WriteString("\t}\n\n")
+	}
+
+	return code.String()
+}
+
+// generateDynamicUnmarshal generates unmarshal code for a dynamic field
+func (g *Generator) generateDynamicUnmarshal(region analyzer.Region) string {
+	// Check element type to determine unmarshal strategy
+	if region.ElementType == "byte" {
+		return g.generateByteUnmarshal(region)
+	}
+	return g.generateStructUnmarshal(region)
+}
+
+// generateByteUnmarshal generates byte-by-byte unmarshal for []byte
+func (g *Generator) generateByteUnmarshal(region analyzer.Region) string {
+	var code strings.Builder
+
+	field := region.Field
+	start := region.Start
+	boundary := region.Boundary
+	countField := field.Layout.CountField
 
 	// Comment
 	if countField != "" {
@@ -518,6 +605,82 @@ func (g *Generator) generateDynamicUnmarshal(region analyzer.Region) string {
 	}
 
 	return code.String()
+}
+
+// generateStructUnmarshal generates element-by-element unmarshal for []StructType
+func (g *Generator) generateStructUnmarshal(region analyzer.Region) string {
+	var code strings.Builder
+
+	field := region.Field
+	start := region.Start
+	boundary := region.Boundary
+	countField := field.Layout.CountField
+	elementSize := region.ElementSize
+	elementType := region.ElementType
+
+	// Comment
+	if countField != "" {
+		code.WriteString(fmt.Sprintf("\t// %s: %s at [%d, %d) with count=%s (element size: %d)\n",
+			field.Name, field.GoType, start, boundary, countField, elementSize))
+	} else {
+		code.WriteString(fmt.Sprintf("\t// %s: %s at [%d, %d) (element size: %d)\n",
+			field.Name, field.GoType, start, boundary, elementSize))
+	}
+
+	// Calculate number of elements
+	if countField != "" {
+		// Explicit count
+		code.WriteString(fmt.Sprintf("\t// Reuse slice if capacity allows\n"))
+		code.WriteString(fmt.Sprintf("\tif cap(p.%s) >= int(p.%s) {\n", field.Name, countField))
+		code.WriteString(fmt.Sprintf("\t\tp.%s = p.%s[:p.%s]\n", field.Name, field.Name, countField))
+		code.WriteString("\t} else {\n")
+		code.WriteString(fmt.Sprintf("\t\tp.%s = make([]%s, p.%s)\n", field.Name, elementType, countField))
+		code.WriteString("\t}\n")
+	} else {
+		// Implicit count from region size
+		numElements := (boundary - start) / elementSize
+		if region.Direction == parser.EndStart {
+			numElements = (start - boundary) / elementSize
+		}
+		code.WriteString(fmt.Sprintf("\tnumElements := %d // (%d bytes / %d bytes per element)\n",
+			numElements, abs(boundary-start), elementSize))
+		code.WriteString(fmt.Sprintf("\t// Reuse slice if capacity allows\n"))
+		code.WriteString(fmt.Sprintf("\tif cap(p.%s) >= numElements {\n", field.Name))
+		code.WriteString(fmt.Sprintf("\t\tp.%s = p.%s[:numElements]\n", field.Name, field.Name))
+		code.WriteString("\t} else {\n")
+		code.WriteString(fmt.Sprintf("\t\tp.%s = make([]%s, numElements)\n", field.Name, elementType))
+		code.WriteString("\t}\n")
+	}
+
+	// Unmarshal loop
+	code.WriteString(fmt.Sprintf("\toffset := %d\n", start))
+	code.WriteString(fmt.Sprintf("\tfor i := range p.%s {\n", field.Name))
+
+	if region.Direction == parser.StartEnd {
+		code.WriteString(fmt.Sprintf("\t\tif err := p.%s[i].UnmarshalLayout(buf[offset:offset+%d]); err != nil {\n",
+			field.Name, elementSize))
+		code.WriteString(fmt.Sprintf("\t\t\treturn fmt.Errorf(\"unmarshal %s[%%d]: %%w\", i, err)\n", field.Name))
+		code.WriteString("\t\t}\n")
+		code.WriteString(fmt.Sprintf("\t\toffset += %d\n", elementSize))
+	} else {
+		// Backward
+		code.WriteString(fmt.Sprintf("\t\tif err := p.%s[i].UnmarshalLayout(buf[offset-%d:offset]); err != nil {\n",
+			field.Name, elementSize))
+		code.WriteString(fmt.Sprintf("\t\t\treturn fmt.Errorf(\"unmarshal %s[%%d]: %%w\", i, err)\n", field.Name))
+		code.WriteString("\t\t}\n")
+		code.WriteString(fmt.Sprintf("\t\toffset -= %d\n", elementSize))
+	}
+
+	code.WriteString("\t}\n\n")
+
+	return code.String()
+}
+
+func abs(x int) int {
+	if x < 0 {
+		return -x
+	}
+	return x
 }
 
 // generateZeroCopyFixedUnmarshal generates zero-copy unmarshal for fixed-size field

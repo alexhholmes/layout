@@ -17,17 +17,17 @@ func TestParseAnnotation(t *testing.T) {
 		{"@layout size=4096 endian=big", 4096, "big", false},
 		{"@layout size=4096 endian=little", 4096, "little", false},
 		{"@layout endian=big size=4096", 4096, "big", false}, // Order doesn't matter
+		{"@layout", 0, "little", false},                      // no params, size will be calculated
+		{"@layout endian=big", 0, "big", false},              // size optional, will be calculated
 
 		// Error cases
-		{"", 0, "", true},                          // no annotation
-		{"size=4096", 0, "", true},                 // missing @layout
-		{"@layout", 0, "", true},                   // no params
-		{"@layout endian=big", 0, "", true},        // missing size
-		{"@layout size=abc", 0, "", true},          // non-numeric size
-		{"@layout size=-1", 0, "", true},           // negative size
-		{"@layout size=0", 0, "", true},            // zero size
-		{"@layout size=4096 endian=foo", 0, "", true}, // invalid endian
-		{"@layout size=4096 unknown=bar", 0, "", true}, // unknown param
+		{"", 0, "", true},                                     // no annotation
+		{"size=4096", 0, "", true},                            // missing @layout
+		{"@layout size=abc", 0, "", true},                     // non-numeric size
+		{"@layout size=-1", 0, "", true},                      // negative size
+		{"@layout size=0", 0, "", true},                       // zero size (explicit 0 is invalid)
+		{"@layout size=4096 endian=foo", 0, "", true},         // invalid endian
+		{"@layout size=4096 unknown=bar", 0, "", true},        // unknown param
 	}
 
 	for _, tt := range tests {

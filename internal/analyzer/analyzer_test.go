@@ -234,3 +234,86 @@ func TestAnalyze_InvalidCountFieldType(t *testing.T) {
 		t.Error("Expected error about invalid count field type")
 	}
 }
+
+func TestAnalyze_NestedCountField(t *testing.T) {
+	// type Page struct {
+	//     Header Header `layout:"@0"`      // Struct field
+	//     Body   []byte `layout:"start-end,count=Header.NumKeys"`
+	// }
+	layout := &parser2.TypeLayout{
+		Name: "Page",
+		Anno: &parser2.TypeAnnotation{Size: 4096},
+		Fields: []parser2.Field{
+			{Name: "Header", GoType: "Header", Layout: &parser2.FieldLayout{
+				Offset: 0, Direction: parser2.Fixed,
+			}},
+			{Name: "Body", GoType: "[]byte", Layout: &parser2.FieldLayout{
+				Offset: -1, Direction: parser2.StartEnd, StartAt: -1,
+				CountField: "Header.NumKeys",
+			}},
+		},
+	}
+
+	reg := NewTypeRegistry()
+	reg.Register("Header", 16) // Assume Header is 16 bytes
+
+	analyzed, err := Analyze(layout, reg)
+	if err != nil {
+		t.Fatalf("Analyze() error: %v", err)
+	}
+
+	if !analyzed.IsValid() {
+		t.Errorf("Expected valid layout, got errors: %v", analyzed.Errors)
+	}
+}
+
+func TestAnalyze_NestedCountField_ParentNotFound(t *testing.T) {
+	// type Page struct {
+	//     Body []byte `layout:"start-end,count=MissingField.NumKeys"`
+	// }
+	layout := &parser2.TypeLayout{
+		Name: "Page",
+		Anno: &parser2.TypeAnnotation{Size: 4096},
+		Fields: []parser2.Field{
+			{Name: "Body", GoType: "[]byte", Layout: &parser2.FieldLayout{
+				Offset: -1, Direction: parser2.StartEnd, StartAt: -1,
+				CountField: "MissingField.NumKeys",
+			}},
+		},
+	}
+
+	reg := NewTypeRegistry()
+	_, err := Analyze(layout, reg)
+
+	if err == nil {
+		t.Error("Expected error about missing parent field")
+	}
+}
+
+func TestAnalyze_NestedCountField_TooManyLevels(t *testing.T) {
+	// type Page struct {
+	//     Body []byte `layout:"start-end,count=A.B.C"`
+	// }
+	layout := &parser2.TypeLayout{
+		Name: "Page",
+		Anno: &parser2.TypeAnnotation{Size: 4096},
+		Fields: []parser2.Field{
+			{Name: "A", GoType: "SomeType", Layout: &parser2.FieldLayout{
+				Offset: 0, Direction: parser2.Fixed,
+			}},
+			{Name: "Body", GoType: "[]byte", Layout: &parser2.FieldLayout{
+				Offset: -1, Direction: parser2.StartEnd, StartAt: -1,
+				CountField: "A.B.C",
+			}},
+		},
+	}
+
+	reg := NewTypeRegistry()
+	reg.Register("SomeType", 16)
+
+	_, err := Analyze(layout, reg)
+
+	if err == nil {
+		t.Error("Expected error about too many nesting levels")
+	}
+}
