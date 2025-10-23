@@ -32,6 +32,12 @@ type FieldLayout struct {
 	Direction  PackDirection
 	StartAt    int    // -1 if unspecified; for directional, where growth begins
 	CountField string // Field name containing count/length for slices (empty if not specified)
+
+	// Indirect slice fields ([][]byte with metadata indirection)
+	From        string // Source slice field name (e.g., "Elements")
+	OffsetField string // Field in element that holds offset (e.g., "KeyOffset")
+	SizeField   string // Field in element that holds size (e.g., "KeySize")
+	Region      string // Region field that this slices into (e.g., "Data")
 }
 
 // ParseTag parses layout struct tags
@@ -68,6 +74,11 @@ func ParseTag(tag string) (*FieldLayout, error) {
 	}
 
 	parts := strings.Split(tag, ",")
+
+	// Check for indirect slice syntax: from=X,offset=Y,size=Z,region=W
+	if strings.HasPrefix(parts[0], "from=") {
+		return parseIndirectSlice(parts)
+	}
 
 	// Check for fixed offset: @N
 	if strings.HasPrefix(parts[0], "@") {
@@ -148,4 +159,40 @@ func parseDirection(s string) (PackDirection, error) {
 	default:
 		return 0, fmt.Errorf("invalid direction: %s (expected start-end or end-start)", s)
 	}
+}
+
+// parseIndirectSlice parses indirect slice tags: from=X,offset=Y,size=Z,region=W
+func parseIndirectSlice(parts []string) (*FieldLayout, error) {
+	f := &FieldLayout{
+		Offset:  -1,
+		StartAt: -1,
+	}
+
+	// Parse all key=value pairs
+	for _, part := range parts {
+		kv := strings.SplitN(part, "=", 2)
+		if len(kv) != 2 {
+			return nil, fmt.Errorf("invalid indirect slice parameter: %s", part)
+		}
+
+		switch kv[0] {
+		case "from":
+			f.From = kv[1]
+		case "offset":
+			f.OffsetField = kv[1]
+		case "size":
+			f.SizeField = kv[1]
+		case "region":
+			f.Region = kv[1]
+		default:
+			return nil, fmt.Errorf("unknown indirect slice parameter: %s", kv[0])
+		}
+	}
+
+	// Validate all 4 required params are present
+	if f.From == "" || f.OffsetField == "" || f.SizeField == "" || f.Region == "" {
+		return nil, fmt.Errorf("indirect slice requires all 4 params: from, offset, size, region")
+	}
+
+	return f, nil
 }

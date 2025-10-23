@@ -82,7 +82,7 @@ func TestIntegrationSimplePage(t *testing.T) {
 	}
 
 	// Generate code
-	gen := NewGenerator(analyzed, reg, "little", "copy", 0, "")
+	gen := NewGenerator(analyzed, layout, reg, "little", "copy", 0, "")
 	code, err := gen.Generate()
 	if err != nil {
 		t.Fatalf("Generate failed: %v", err)
@@ -100,7 +100,7 @@ func TestIntegrationSimplePage(t *testing.T) {
 		// Header marshal
 		"binary.LittleEndian.PutUint16(buf[0:2], p.Header)",
 		// Body marshal (dynamic)
-		"offset := 2",
+		"offset = 2",
 		"for i := range p.Body",
 		"if offset >= 4088",
 		"buf[offset] = p.Body[i]",
@@ -170,7 +170,7 @@ func TestIntegrationWithCountField(t *testing.T) {
 		t.Fatalf("Analyze failed: %v", err)
 	}
 
-	gen := NewGenerator(analyzed, reg, "little", "copy", 0, "")
+	gen := NewGenerator(analyzed, layout, reg, "little", "copy", 0, "")
 	code, err := gen.Generate()
 	if err != nil {
 		t.Fatalf("Generate failed: %v", err)
@@ -243,7 +243,7 @@ func TestIntegrationBackwardGrowth(t *testing.T) {
 		t.Errorf("Keys boundary should be 2, got %d", keysRegion.Boundary)
 	}
 
-	gen := NewGenerator(analyzed, reg, "little", "copy", 0, "")
+	gen := NewGenerator(analyzed, layout, reg, "little", "copy", 0, "")
 	code, err := gen.Generate()
 	if err != nil {
 		t.Fatalf("Generate failed: %v", err)

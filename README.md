@@ -290,11 +290,12 @@ pagePool.Put(page.backing)
 - `int8`, `int16`, `int32`, `int64`
 - `byte`, `bool`
 - `[N]byte` - byte arrays
+- Struct types with `@layout` annotation
 
 ### Dynamic fields
 - `[]byte` - byte slices (with or without count)
-
-Future: `[]StructType` for fixed-size struct slices.
+- `[]StructType` - struct slices (requires count field)
+- `[][]byte` - indirect slices via metadata (see Indirect Slices)
 
 ## Generated Code
 
@@ -419,6 +420,8 @@ type Record struct {
 
 ## Count Field Semantics
 
+### Basic Count Fields
+
 Count field only required when dynamic region has **no fixed boundary**:
 
 ```go
@@ -431,14 +434,144 @@ Values []byte `layout:"start-end,count=NumValues"`  // Length unknown
 Keys   []byte `layout:"end-start"`  // Also dynamic
 ```
 
+### Nested Count Fields
+
+Reference struct fields using dot notation:
+
+```go
+// @layout size=4096
+type LeafPage struct {
+    Header   PageHeader     `layout:"@0"`
+    Elements []LeafElement  `layout:"start-end,count=Header.NumKeys"`
+    Data     []byte         `layout:"end-start"`
+}
+```
+
+Supports one level of nesting: `Header.NumKeys` is valid, `A.B.C` is not.
+
+### Count Field Validation
+
+Count fields must be integer types and sized appropriately:
+
+```go
+// ✓ Valid
+NumKeys uint16 `layout:"@0"`
+Keys []byte `layout:"start-end,count=NumKeys"`
+
+// ✗ Invalid - wrong type
+NumKeys string `layout:"@0"`
+Keys []byte `layout:"start-end,count=NumKeys"`  // Error: count field must be integer
+
+// ✗ Invalid - overflow
+NumKeys uint8 `layout:"@0"`  // Max 255
+Keys [4000]byte `layout:"start-end,count=NumKeys"`  // Error: max 4000 elements exceeds uint8
+```
+
+**Compile-time checks**:
+- Count field type: Must be `int8/16/32/64` or `uint8/16/32/64`
+- Count capacity: Validates count type can hold maximum possible elements
+
+### Struct Slices
+
+`[]StructType` requires count field (always):
+
+```go
+// @layout
+type LeafElement struct {
+    Key    uint32 `layout:"@0"`
+    Offset uint32 `layout:"@4"`
+}
+
+// @layout size=4096
+type LeafPage struct {
+    Header   PageHeader     `layout:"@0"`
+    Elements []LeafElement  `layout:"@24,start-end,count=Header.NumKeys"`
+}
+```
+
+Generated code calls `MarshalLayout`/`UnmarshalLayout` on each element.
+
 See `COUNT_SEMANTICS.md` for details.
+
+## Indirect Slices
+
+`[][]byte` fields with metadata indirection - slices backed by a single data region with offsets stored in a separate metadata array.
+
+**Use case**: B-tree leaf pages where keys/values are variable-length and stored in a packed data region.
+
+### Syntax
+
+```go
+Keys [][]byte `layout:"from=Elements,offset=KeyOffset,size=KeySize,region=Data"`
+```
+
+**Required parameters**:
+- `from=FieldName` - Source slice containing metadata (must be `[]StructType`)
+- `offset=FieldName` - Field in source elements holding offset (must be integer type)
+- `size=FieldName` - Field in source elements holding size (must be integer type)
+- `region=FieldName` - Data region field (must be `[]byte`)
+
+### Example: B-tree Leaf Page
+
+```go
+// @layout
+type LeafElement struct {
+    KeyOffset   uint32 `layout:"@0"`
+    KeySize     uint32 `layout:"@4"`
+    ValueOffset uint32 `layout:"@8"`
+    ValueSize   uint32 `layout:"@12"`
+}
+
+// @layout size=4096
+type LeafPage struct {
+    Header   PageHeader     `layout:"@0"`
+    Elements []LeafElement  `layout:"@24,start-end,count=Header.NumKeys"`
+    Data     []byte         `layout:"end-start"`
+    Keys     [][]byte       `layout:"from=Elements,offset=KeyOffset,size=KeySize,region=Data"`
+    Values   [][]byte       `layout:"from=Elements,offset=ValueOffset,size=ValueSize,region=Data"`
+}
+```
+
+### Generated Code
+
+**Unmarshal**: Loop through metadata, slice into buffer
+
+```go
+// Keys: [][]byte from=Elements offset=KeyOffset size=KeySize region=Data
+for i := range p.Elements {
+    offset := int(p.Elements[i].KeyOffset)
+    size := int(p.Elements[i].KeySize)
+    p.Keys[i] = buf[offset:offset+size]
+}
+```
+
+**Marshal**: Pack backward, update metadata
+
+```go
+// Keys: [][]byte packed backward into Data, updating Elements metadata
+offset = 4096
+for i := len(p.Keys) - 1; i >= 0; i-- {
+    size := len(p.Keys[i])
+    offset -= size
+    copy(buf[offset:offset+size], p.Keys[i])
+    p.Elements[i].KeyOffset = uint32(offset)
+    p.Elements[i].KeySize = uint32(size)
+}
+```
+
+**Offsets**: Absolute offsets into buffer (not relative to Data region).
+
+**Memory**: Zero-copy - `Keys[i]` slices directly into `buf`, no allocation.
 
 ## Error Detection
 
 Compile-time checks:
 - **Overlapping fixed fields**: `collision: Field1 [0, 8) overlaps Field2 [4, 12)`
 - **Missing count fields**: `field 'Body' requires count= (no fixed boundary)`
-- **Invalid count types**: `count field 'Len' must be uint8/16/32/64, got: string`
+- **Invalid count types**: `count field 'Len' must be int/uint 8/16/32/64, got: string`
+- **Count capacity overflow**: `count field 'Count' (type uint8, max 255) cannot hold max 512 elements`
+- **Nested count field errors**: `count field 'A.B.C' has invalid nested reference (only one level supported)`
+- **Indirect slice validation**: `field 'Keys': source field 'Elements' must be a struct slice, not []byte`
 - **Out of bounds**: `field [4088, 4100) exceeds buffer size 4096`
 
 Runtime checks:
@@ -466,51 +599,6 @@ After install, `layout` command available globally.
 layout generate page.go           # Generate page_layout.go
 layout generate btree/*.go        # Generate for package
 ```
-
-## Architecture
-
-```
-Input (page.go)
-    ↓
-parser.ParseFile()      → TypeLayout with annotations
-    ↓
-analyzer.Analyze()      → AnalyzedLayout with regions
-    ↓
-codegen.Generate()      → Generated Go source
-    ↓
-Output (page_layout.go)
-```
-
-See implementation docs:
-- `parser/` - AST parsing, tag extraction
-- `analyzer/` - Layout analysis, boundary calculation
-- `codegen/` - Code generation
-
-## Testing
-
-```bash
-go test ./...
-```
-
-71 tests covering:
-- Tag parsing (22 tests)
-- Annotation parsing (18 tests)
-- Type size calculation
-- Layout analysis (9 tests)
-- Code generation (14 unit tests)
-- Integration tests (3 end-to-end)
-
-## Limitations
-
-Current:
-- Only `[]byte` for dynamic fields (no `[]StructType` yet)
-- Single buffer per type (no nested layouts)
-- Zero-copy mode uses `unsafe` (not compatible with all Go security settings)
-
-Planned:
-- `[]StructType` with inline marshaling
-- Nested struct support
-- Field-level alignment/padding control
 
 ## License
 

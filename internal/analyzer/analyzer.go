@@ -47,6 +47,11 @@ func Analyze(layout *parser.TypeLayout, registry *TypeRegistry) (*AnalyzedLayout
 
 	// Phase 1: Build regions from fields
 	for _, field := range layout.Fields {
+		// Skip indirect slice fields - they don't occupy regions
+		if field.Layout.From != "" {
+			continue
+		}
+
 		region, err := buildRegion(field, layout.Anno.Size, registry)
 		if err != nil {
 			a.Errors = append(a.Errors, fmt.Sprintf("%s: %v", field.Name, err))
@@ -71,7 +76,13 @@ func Analyze(layout *parser.TypeLayout, registry *TypeRegistry) (*AnalyzedLayout
 		return a, err
 	}
 
-	// Phase 4: Detect collisions
+	// Phase 4: Validate indirect slices
+	if err := validateIndirectSlices(a, layout, registry); err != nil {
+		a.Errors = append(a.Errors, err.Error())
+		return a, err
+	}
+
+	// Phase 5: Detect collisions
 	detectCollisions(a)
 
 	return a, nil
@@ -394,6 +405,73 @@ func isCountType(goType string) bool {
 		return true
 	}
 	return false
+}
+
+// validateIndirectSlices validates [][]byte fields with metadata indirection
+func validateIndirectSlices(a *AnalyzedLayout, layout *parser.TypeLayout, registry *TypeRegistry) error {
+	for _, field := range layout.Fields {
+		// Skip fields without indirect slice params
+		if field.Layout.From == "" {
+			continue
+		}
+
+		// Validate field type is [][]byte
+		if field.GoType != "[][]byte" {
+			return fmt.Errorf("field '%s': indirect slices require type [][]byte, got: %s",
+				field.Name, field.GoType)
+		}
+
+		// Find source field (from=)
+		var fromField *parser.Field
+		for i := range layout.Fields {
+			if layout.Fields[i].Name == field.Layout.From {
+				fromField = &layout.Fields[i]
+				break
+			}
+		}
+		if fromField == nil {
+			return fmt.Errorf("field '%s': source field '%s' not found",
+				field.Name, field.Layout.From)
+		}
+
+		// Validate source is a slice
+		fromElemType := extractElementType(fromField.GoType)
+		if fromElemType == "" {
+			return fmt.Errorf("field '%s': source field '%s' must be a slice type, got: %s",
+				field.Name, field.Layout.From, fromField.GoType)
+		}
+
+		// Validate source is not []byte (must be []StructType)
+		if fromElemType == "byte" {
+			return fmt.Errorf("field '%s': source field '%s' must be a struct slice, not []byte",
+				field.Name, field.Layout.From)
+		}
+
+		// Validate offset and size fields exist in source element type
+		// We can't validate field types without full AST parsing, so we trust the user
+		// The generator will catch errors at compile time if fields don't exist
+
+		// Find region field
+		var regionField *parser.Field
+		for i := range layout.Fields {
+			if layout.Fields[i].Name == field.Layout.Region {
+				regionField = &layout.Fields[i]
+				break
+			}
+		}
+		if regionField == nil {
+			return fmt.Errorf("field '%s': region field '%s' not found",
+				field.Name, field.Layout.Region)
+		}
+
+		// Validate region is []byte
+		if regionField.GoType != "[]byte" {
+			return fmt.Errorf("field '%s': region field '%s' must be []byte, got: %s",
+				field.Name, field.Layout.Region, regionField.GoType)
+		}
+	}
+
+	return nil
 }
 
 func detectCollisions(a *AnalyzedLayout) {

@@ -11,6 +11,7 @@ import (
 // Generator generates marshal/unmarshal code for binary layouts
 type Generator struct {
 	analyzed  *analyzer.AnalyzedLayout
+	layout    *parser.TypeLayout // Original parsed layout (for indirect slices)
 	registry  *analyzer.TypeRegistry
 	endian    string // "little" or "big"
 	mode      string // "copy" or "zerocopy"
@@ -19,7 +20,7 @@ type Generator struct {
 }
 
 // NewGenerator creates a new code generator
-func NewGenerator(analyzed *analyzer.AnalyzedLayout, reg *analyzer.TypeRegistry, endian string, mode string, align int, allocator string) *Generator {
+func NewGenerator(analyzed *analyzer.AnalyzedLayout, layout *parser.TypeLayout, reg *analyzer.TypeRegistry, endian string, mode string, align int, allocator string) *Generator {
 	if endian == "" {
 		endian = "little"
 	}
@@ -28,6 +29,7 @@ func NewGenerator(analyzed *analyzer.AnalyzedLayout, reg *analyzer.TypeRegistry,
 	}
 	return &Generator{
 		analyzed:  analyzed,
+		layout:    layout,
 		registry:  reg,
 		endian:    endian,
 		mode:      mode,
@@ -83,7 +85,28 @@ func (g *Generator) generateCopyMarshal() string {
 
 	// Function signature
 	code.WriteString(fmt.Sprintf("func (p *%s) MarshalLayout() ([]byte, error) {\n", g.analyzed.TypeName))
-	code.WriteString(fmt.Sprintf("\tbuf := make([]byte, %d)\n\n", g.analyzed.BufferSize))
+	code.WriteString(fmt.Sprintf("\tbuf := make([]byte, %d)\n", g.analyzed.BufferSize))
+
+	// Declare offset only if we have dynamic regions or indirect slices
+	hasDynamic := false
+	for _, region := range g.analyzed.Regions {
+		if region.Kind == analyzer.DynamicRegion {
+			hasDynamic = true
+			break
+		}
+	}
+	if !hasDynamic && g.layout != nil {
+		for _, field := range g.layout.Fields {
+			if field.Layout.From != "" {
+				hasDynamic = true
+				break
+			}
+		}
+	}
+	if hasDynamic {
+		code.WriteString("\tvar offset int\n")
+	}
+	code.WriteString("\n")
 
 	// Generate code for each region
 	for _, region := range g.analyzed.Regions {
@@ -91,6 +114,15 @@ func (g *Generator) generateCopyMarshal() string {
 			code.WriteString(g.generateFixedMarshal(region))
 		} else {
 			code.WriteString(g.generateDynamicMarshal(region))
+		}
+	}
+
+	// Generate indirect slice marshal ([][]byte with metadata indirection)
+	if g.layout != nil {
+		for _, field := range g.layout.Fields {
+			if field.Layout.From != "" {
+				code.WriteString(g.generateIndirectMarshal(field))
+			}
 		}
 	}
 
@@ -153,6 +185,15 @@ func (g *Generator) generateCopyUnmarshal() string {
 			code.WriteString(g.generateFixedUnmarshal(region))
 		} else {
 			code.WriteString(g.generateDynamicUnmarshal(region))
+		}
+	}
+
+	// Generate indirect slice unmarshal ([][]byte with metadata indirection)
+	if g.layout != nil {
+		for _, field := range g.layout.Fields {
+			if field.Layout.From != "" {
+				code.WriteString(g.generateIndirectUnmarshal(field))
+			}
 		}
 	}
 
@@ -423,7 +464,7 @@ func (g *Generator) generateByteMarshal(region analyzer.Region) string {
 
 	if region.Direction == parser.StartEnd {
 		// Forward growth
-		code.WriteString(fmt.Sprintf("\toffset := %d\n", start))
+		code.WriteString(fmt.Sprintf("\toffset = %d\n", start))
 
 		// Count validation if count field exists
 		if countField != "" {
@@ -443,7 +484,7 @@ func (g *Generator) generateByteMarshal(region analyzer.Region) string {
 		code.WriteString("\t}\n\n")
 	} else {
 		// Backward growth (end-start)
-		code.WriteString(fmt.Sprintf("\toffset := %d\n", start))
+		code.WriteString(fmt.Sprintf("\toffset = %d\n", start))
 
 		// Count validation if count field exists
 		if countField != "" {
@@ -487,7 +528,7 @@ func (g *Generator) generateStructMarshal(region analyzer.Region) string {
 
 	if region.Direction == parser.StartEnd {
 		// Forward growth
-		code.WriteString(fmt.Sprintf("\toffset := %d\n", start))
+		code.WriteString(fmt.Sprintf("\toffset = %d\n", start))
 
 		// Count validation if count field exists
 		if countField != "" {
@@ -511,7 +552,7 @@ func (g *Generator) generateStructMarshal(region analyzer.Region) string {
 		code.WriteString("\t}\n\n")
 	} else {
 		// Backward growth (end-start)
-		code.WriteString(fmt.Sprintf("\toffset := %d\n", start))
+		code.WriteString(fmt.Sprintf("\toffset = %d\n", start))
 
 		// Count validation if count field exists
 		if countField != "" {
@@ -851,6 +892,71 @@ func (g *Generator) generateZeroCopyDynamicMarshal(region analyzer.Region) strin
 	// But we might need to copy if it was modified.
 	// For now, just note that fields should reference p.buf directly.
 	code.WriteString(fmt.Sprintf("\t// %s is already sliced from p.buf, no copy needed\n\n", field.Name))
+
+	return code.String()
+}
+
+// generateIndirectUnmarshal generates unmarshal code for [][]byte with metadata indirection
+func (g *Generator) generateIndirectUnmarshal(field parser.Field) string {
+	var code strings.Builder
+
+	// Comment
+	code.WriteString(fmt.Sprintf("\t// %s: [][]byte from=%s offset=%s size=%s region=%s\n",
+		field.Name, field.Layout.From, field.Layout.OffsetField, field.Layout.SizeField, field.Layout.Region))
+
+	// Allocate slice matching source length
+	code.WriteString(fmt.Sprintf("\t// Reuse slice if capacity allows\n"))
+	code.WriteString(fmt.Sprintf("\tif cap(p.%s) >= len(p.%s) {\n", field.Name, field.Layout.From))
+	code.WriteString(fmt.Sprintf("\t\tp.%s = p.%s[:len(p.%s)]\n", field.Name, field.Name, field.Layout.From))
+	code.WriteString("\t} else {\n")
+	code.WriteString(fmt.Sprintf("\t\tp.%s = make([][]byte, len(p.%s))\n", field.Name, field.Layout.From))
+	code.WriteString("\t}\n")
+
+	// Loop through source elements and create slices
+	code.WriteString(fmt.Sprintf("\tfor i := range p.%s {\n", field.Layout.From))
+	code.WriteString(fmt.Sprintf("\t\toffset := int(p.%s[i].%s)\n", field.Layout.From, field.Layout.OffsetField))
+	code.WriteString(fmt.Sprintf("\t\tsize := int(p.%s[i].%s)\n", field.Layout.From, field.Layout.SizeField))
+	code.WriteString(fmt.Sprintf("\t\tp.%s[i] = buf[offset:offset+size]\n", field.Name))
+	code.WriteString("\t}\n\n")
+
+	return code.String()
+}
+
+// generateIndirectMarshal generates marshal code for [][]byte with backward packing
+func (g *Generator) generateIndirectMarshal(field parser.Field) string {
+	var code strings.Builder
+
+	// Comment
+	code.WriteString(fmt.Sprintf("\t// %s: [][]byte packed backward into %s, updating %s metadata\n",
+		field.Name, field.Layout.Region, field.Layout.From))
+
+	// Find the region field to determine pack start point
+	var regionField *parser.Field
+	for i := range g.layout.Fields {
+		if g.layout.Fields[i].Name == field.Layout.Region {
+			regionField = &g.layout.Fields[i]
+			break
+		}
+	}
+
+	// Pack backward from region end
+	var packStart string
+	if regionField != nil && regionField.Layout.Direction == parser.EndStart {
+		// Region is end-start, so it starts at bufferSize and grows backward
+		packStart = fmt.Sprintf("%d", g.analyzed.BufferSize)
+	} else {
+		// Default: pack from buffer end
+		packStart = fmt.Sprintf("%d", g.analyzed.BufferSize)
+	}
+
+	code.WriteString(fmt.Sprintf("\toffset = %s\n", packStart))
+	code.WriteString(fmt.Sprintf("\tfor i := len(p.%s) - 1; i >= 0; i-- {\n", field.Name))
+	code.WriteString(fmt.Sprintf("\t\tsize := len(p.%s[i])\n", field.Name))
+	code.WriteString("\t\toffset -= size\n")
+	code.WriteString(fmt.Sprintf("\t\tcopy(buf[offset:offset+size], p.%s[i])\n", field.Name))
+	code.WriteString(fmt.Sprintf("\t\tp.%s[i].%s = uint32(offset)\n", field.Layout.From, field.Layout.OffsetField))
+	code.WriteString(fmt.Sprintf("\t\tp.%s[i].%s = uint32(size)\n", field.Layout.From, field.Layout.SizeField))
+	code.WriteString("\t}\n\n")
 
 	return code.String()
 }

@@ -124,7 +124,7 @@ func generate(inputFile string) error {
 		align := layout.Anno.Align
 		allocator := layout.Anno.Allocator
 
-		gen := codegen.NewGenerator(analyzed, registry, endian, mode, align, allocator)
+		gen := codegen.NewGenerator(analyzed, layout, registry, endian, mode, align, allocator)
 
 		// Generate marshal
 		marshal := gen.GenerateMarshal()
