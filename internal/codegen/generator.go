@@ -819,7 +819,15 @@ func (g *Generator) generateZeroCopyFixedUnmarshal(region analyzer.Region) strin
 			field.Name, start))
 
 	default:
-		code.WriteString(fmt.Sprintf("\t// TODO: zerocopy unmarshal %s\n\n", field.GoType))
+		// Check if it's a byte array
+		if strings.HasPrefix(field.GoType, "[") && strings.Contains(field.GoType, "]byte") {
+			code.WriteString(fmt.Sprintf("\tcopy(p.%s[:], p.buf[%d:%d])\n\n", field.Name, start, end))
+		} else {
+			// Assume it's a struct type - unmarshal using its method
+			code.WriteString(fmt.Sprintf("\tif err := p.%s.UnmarshalLayout(p.buf[%d:%d]); err != nil {\n", field.Name, start, end))
+			code.WriteString(fmt.Sprintf("\t\treturn fmt.Errorf(\"unmarshal %s: %%w\", err)\n", field.Name))
+			code.WriteString("\t}\n\n")
+		}
 	}
 
 	return code.String()
@@ -834,39 +842,96 @@ func (g *Generator) generateZeroCopyDynamicUnmarshal(region analyzer.Region) str
 	boundary := region.Boundary
 	countField := field.Layout.CountField
 
-	// Only handle []byte for now
-	if field.GoType != "[]byte" {
-		code.WriteString(fmt.Sprintf("\t// TODO: zerocopy unmarshal dynamic %s\n\n", field.GoType))
+	// Handle []byte - slice directly from p.buf
+	if field.GoType == "[]byte" {
+		// Comment
+		if countField != "" {
+			code.WriteString(fmt.Sprintf("\t// %s: %s at [%d, %d) with count=%s\n",
+				field.Name, field.GoType, start, boundary, countField))
+		} else {
+			code.WriteString(fmt.Sprintf("\t// %s: %s at [%d, %d)\n",
+				field.Name, field.GoType, start, boundary))
+		}
+
+		// Slice directly into buffer
+		if countField != "" {
+			// Count-dependent slicing
+			if region.Direction == parser.StartEnd {
+				// Forward: slice from start with count
+				code.WriteString(fmt.Sprintf("\tp.%s = p.buf[%d:%d+p.%s]\n\n", field.Name, start, start, countField))
+			} else {
+				// Backward: slice from (start - count) to start
+				code.WriteString(fmt.Sprintf("\tp.%s = p.buf[%d-p.%s:%d]\n\n", field.Name, start, countField, start))
+			}
+		} else {
+			// Implicit length from boundaries
+			if region.Direction == parser.StartEnd {
+				code.WriteString(fmt.Sprintf("\tp.%s = p.buf[%d:%d]\n\n", field.Name, start, boundary))
+			} else {
+				code.WriteString(fmt.Sprintf("\tp.%s = p.buf[%d:%d]\n\n", field.Name, boundary, start))
+			}
+		}
 		return code.String()
 	}
 
+	// Handle struct slices - need to unmarshal each element
+	elementSize := region.ElementSize
+	elementType := region.ElementType
+
 	// Comment
 	if countField != "" {
-		code.WriteString(fmt.Sprintf("\t// %s: %s at [%d, %d) with count=%s\n",
-			field.Name, field.GoType, start, boundary, countField))
+		code.WriteString(fmt.Sprintf("\t// %s: %s at [%d, %d) with count=%s (element size: %d)\n",
+			field.Name, field.GoType, start, boundary, countField, elementSize))
 	} else {
-		code.WriteString(fmt.Sprintf("\t// %s: %s at [%d, %d)\n",
-			field.Name, field.GoType, start, boundary))
+		code.WriteString(fmt.Sprintf("\t// %s: %s at [%d, %d) (element size: %d)\n",
+			field.Name, field.GoType, start, boundary, elementSize))
 	}
 
-	// Slice directly into buffer
+	// Calculate number of elements
 	if countField != "" {
-		// Count-dependent slicing
-		if region.Direction == parser.StartEnd {
-			// Forward: slice from start with count
-			code.WriteString(fmt.Sprintf("\tp.%s = p.buf[%d:%d+p.%s]\n\n", field.Name, start, start, countField))
-		} else {
-			// Backward: slice from (start - count) to start
-			code.WriteString(fmt.Sprintf("\tp.%s = p.buf[%d-p.%s:%d]\n\n", field.Name, start, countField, start))
-		}
+		// Explicit count
+		code.WriteString(fmt.Sprintf("\t// Reuse slice if capacity allows\n"))
+		code.WriteString(fmt.Sprintf("\tif cap(p.%s) >= int(p.%s) {\n", field.Name, countField))
+		code.WriteString(fmt.Sprintf("\t\tp.%s = p.%s[:p.%s]\n", field.Name, field.Name, countField))
+		code.WriteString("\t} else {\n")
+		code.WriteString(fmt.Sprintf("\t\tp.%s = make([]%s, p.%s)\n", field.Name, elementType, countField))
+		code.WriteString("\t}\n")
 	} else {
-		// Implicit length from boundaries
-		if region.Direction == parser.StartEnd {
-			code.WriteString(fmt.Sprintf("\tp.%s = p.buf[%d:%d]\n\n", field.Name, start, boundary))
-		} else {
-			code.WriteString(fmt.Sprintf("\tp.%s = p.buf[%d:%d]\n\n", field.Name, boundary, start))
+		// Implicit count from region size
+		numElements := (boundary - start) / elementSize
+		if region.Direction == parser.EndStart {
+			numElements = (start - boundary) / elementSize
 		}
+		code.WriteString(fmt.Sprintf("\tnumElements := %d // (%d bytes / %d bytes per element)\n",
+			numElements, abs(boundary-start), elementSize))
+		code.WriteString(fmt.Sprintf("\t// Reuse slice if capacity allows\n"))
+		code.WriteString(fmt.Sprintf("\tif cap(p.%s) >= numElements {\n", field.Name))
+		code.WriteString(fmt.Sprintf("\t\tp.%s = p.%s[:numElements]\n", field.Name, field.Name))
+		code.WriteString("\t} else {\n")
+		code.WriteString(fmt.Sprintf("\t\tp.%s = make([]%s, numElements)\n", field.Name, elementType))
+		code.WriteString("\t}\n")
 	}
+
+	// Unmarshal loop
+	code.WriteString(fmt.Sprintf("\toffset := %d\n", start))
+	code.WriteString(fmt.Sprintf("\tfor i := range p.%s {\n", field.Name))
+
+	if region.Direction == parser.StartEnd {
+		code.WriteString(fmt.Sprintf("\t\tif err := p.%s[i].UnmarshalLayout(p.buf[offset:offset+%d]); err != nil {\n",
+			field.Name, elementSize))
+		code.WriteString(fmt.Sprintf("\t\t\treturn fmt.Errorf(\"unmarshal %s[%%d]: %%w\", i, err)\n", field.Name))
+		code.WriteString("\t\t}\n")
+		code.WriteString(fmt.Sprintf("\t\toffset += %d\n", elementSize))
+	} else {
+		// Backward
+		code.WriteString(fmt.Sprintf("\t\tif err := p.%s[i].UnmarshalLayout(p.buf[offset-%d:offset]); err != nil {\n",
+			field.Name, elementSize))
+		code.WriteString(fmt.Sprintf("\t\t\treturn fmt.Errorf(\"unmarshal %s[%%d]: %%w\", i, err)\n", field.Name))
+		code.WriteString("\t\t}\n")
+		code.WriteString(fmt.Sprintf("\t\toffset -= %d\n", elementSize))
+	}
+
+	code.WriteString("\t}\n\n")
 
 	return code.String()
 }
@@ -913,7 +978,12 @@ func (g *Generator) generateZeroCopyFixedMarshal(region analyzer.Region) string 
 		if strings.HasPrefix(field.GoType, "[") && strings.Contains(field.GoType, "]byte") {
 			code.WriteString(fmt.Sprintf("\tcopy(p.buf[%d:%d], p.%s[:])\n\n", start, end, field.Name))
 		} else {
-			code.WriteString(fmt.Sprintf("\t// TODO: zerocopy marshal %s\n\n", field.GoType))
+			// Assume it's a struct type - marshal using its method
+			code.WriteString(fmt.Sprintf("\telemBuf, err := p.%s.MarshalLayout()\n", field.Name))
+			code.WriteString("\tif err != nil {\n")
+			code.WriteString(fmt.Sprintf("\t\treturn nil, fmt.Errorf(\"marshal %s: %%w\", err)\n", field.Name))
+			code.WriteString("\t}\n")
+			code.WriteString(fmt.Sprintf("\tcopy(p.buf[%d:%d], elemBuf)\n\n", start, end))
 		}
 	}
 
@@ -929,25 +999,70 @@ func (g *Generator) generateZeroCopyDynamicMarshal(region analyzer.Region) strin
 	boundary := region.Boundary
 	countField := field.Layout.CountField
 
-	// Only handle []byte for now
-	if field.GoType != "[]byte" {
-		code.WriteString(fmt.Sprintf("\t// TODO: zerocopy marshal dynamic %s\n\n", field.GoType))
+	// Handle []byte - already in p.buf, no copy needed
+	if field.GoType == "[]byte" {
+		// Comment
+		if countField != "" {
+			code.WriteString(fmt.Sprintf("\t// %s: %s at [%d, %d) with count=%s\n",
+				field.Name, field.GoType, start, boundary, countField))
+		} else {
+			code.WriteString(fmt.Sprintf("\t// %s: %s at [%d, %d)\n",
+				field.Name, field.GoType, start, boundary))
+		}
+		code.WriteString(fmt.Sprintf("\t// %s is already sliced from p.buf, no copy needed\n\n", field.Name))
 		return code.String()
 	}
 
+	// Handle struct slices - need to marshal each element
+	elementSize := region.ElementSize
+
 	// Comment
 	if countField != "" {
-		code.WriteString(fmt.Sprintf("\t// %s: %s at [%d, %d) with count=%s\n",
-			field.Name, field.GoType, start, boundary, countField))
+		code.WriteString(fmt.Sprintf("\t// %s: %s at [%d, %d) with count=%s (element size: %d)\n",
+			field.Name, field.GoType, start, boundary, countField, elementSize))
 	} else {
-		code.WriteString(fmt.Sprintf("\t// %s: %s at [%d, %d)\n",
-			field.Name, field.GoType, start, boundary))
+		code.WriteString(fmt.Sprintf("\t// %s: %s at [%d, %d) (element size: %d)\n",
+			field.Name, field.GoType, start, boundary, elementSize))
 	}
 
-	// Since Body is a slice into p.buf[], it's already in the right place.
-	// But we might need to copy if it was modified.
-	// For now, just note that fields should reference p.buf directly.
-	code.WriteString(fmt.Sprintf("\t// %s is already sliced from p.buf, no copy needed\n\n", field.Name))
+	// Count validation if count field exists
+	if countField != "" {
+		code.WriteString(fmt.Sprintf("\tif len(p.%s) != int(p.%s) {\n", field.Name, countField))
+		code.WriteString(fmt.Sprintf("\t\treturn nil, fmt.Errorf(\"%s length mismatch: have %%d, want %%d\", len(p.%s), p.%s)\n",
+			field.Name, field.Name, countField))
+		code.WriteString("\t}\n")
+	}
+
+	// Marshal loop for structs
+	if region.Direction == parser.StartEnd {
+		// Forward growth
+		code.WriteString(fmt.Sprintf("\toffset := %d\n", start))
+		code.WriteString(fmt.Sprintf("\tfor i := range p.%s {\n", field.Name))
+		code.WriteString(fmt.Sprintf("\t\tif offset + %d > %d {\n", elementSize, boundary))
+		code.WriteString(fmt.Sprintf("\t\t\treturn nil, fmt.Errorf(\"%s collision at offset %%d\", offset)\n", field.Name))
+		code.WriteString("\t\t}\n")
+		code.WriteString(fmt.Sprintf("\t\telemBuf, err := p.%s[i].MarshalLayout()\n", field.Name))
+		code.WriteString("\t\tif err != nil {\n")
+		code.WriteString(fmt.Sprintf("\t\t\treturn nil, fmt.Errorf(\"marshal %s[%%d]: %%w\", i, err)\n", field.Name))
+		code.WriteString("\t\t}\n")
+		code.WriteString(fmt.Sprintf("\t\tcopy(p.buf[offset:offset+%d], elemBuf)\n", elementSize))
+		code.WriteString(fmt.Sprintf("\t\toffset += %d\n", elementSize))
+		code.WriteString("\t}\n\n")
+	} else {
+		// Backward growth
+		code.WriteString(fmt.Sprintf("\toffset := %d\n", start))
+		code.WriteString(fmt.Sprintf("\tfor i := len(p.%s) - 1; i >= 0; i-- {\n", field.Name))
+		code.WriteString(fmt.Sprintf("\t\toffset -= %d\n", elementSize))
+		code.WriteString(fmt.Sprintf("\t\tif offset < %d {\n", boundary))
+		code.WriteString(fmt.Sprintf("\t\t\treturn nil, fmt.Errorf(\"%s collision at offset %%d\", offset)\n", field.Name))
+		code.WriteString("\t\t}\n")
+		code.WriteString(fmt.Sprintf("\t\telemBuf, err := p.%s[i].MarshalLayout()\n", field.Name))
+		code.WriteString("\t\tif err != nil {\n")
+		code.WriteString(fmt.Sprintf("\t\t\treturn nil, fmt.Errorf(\"marshal %s[%%d]: %%w\", i, err)\n", field.Name))
+		code.WriteString("\t\t}\n")
+		code.WriteString(fmt.Sprintf("\t\tcopy(p.buf[offset:offset+%d], elemBuf)\n", elementSize))
+		code.WriteString("\t}\n\n")
+	}
 
 	return code.String()
 }
