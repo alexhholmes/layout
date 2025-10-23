@@ -290,6 +290,20 @@ func (g *Generator) generateZeroCopyUnmarshal() string {
 	// Add LoadFrom helper
 	code.WriteString(g.generateLoadFromHelper())
 
+	// Add RebuildIndirectSlices helper if there are indirect slices
+	if g.layout != nil {
+		hasIndirect := false
+		for _, field := range g.layout.Fields {
+			if field.Layout.From != "" {
+				hasIndirect = true
+				break
+			}
+		}
+		if hasIndirect {
+			code.WriteString(g.generateRebuildIndirectSlices())
+		}
+	}
+
 	return code.String()
 }
 
@@ -1176,6 +1190,24 @@ func (g *Generator) generateZeroCopyDynamicUnmarshal(region analyzer.Region) str
 				field.Name, field.GoType, start, boundary))
 		}
 
+		// Check if this region is referenced by indirect slices
+		isIndirectRegion := false
+		if g.layout != nil {
+			for _, f := range g.layout.Fields {
+				if f.Layout.From != "" && f.Layout.Region == field.Name {
+					isIndirectRegion = true
+					break
+				}
+			}
+		}
+
+		// For end-start regions used as data regions for indirect slices,
+		// skip automatic initialization - it will be set by RebuildIndirectSlices
+		if region.Direction == parser.EndStart && isIndirectRegion {
+			code.WriteString(fmt.Sprintf("\t// %s: end-start data region, set by indirect slice reconstruction\n\n", field.Name))
+			return code.String()
+		}
+
 		// Slice directly into buffer
 		if countField != "" {
 			// Count-dependent slicing
@@ -1344,6 +1376,41 @@ func (g *Generator) generateIndirectUnmarshal(field parser.Field) string {
 	code.WriteString(fmt.Sprintf("\t// %s: [][]byte from=%s offset=%s size=%s region=%s\n",
 		field.Name, field.Layout.From, field.Layout.OffsetField, field.Layout.SizeField, field.Layout.Region))
 
+	// For end-start data regions, we need to calculate where Data should start
+	// This only needs to be done once for all indirect slices
+	// Check if this is the first indirect field and if Data region needs initialization
+	if g.layout != nil {
+		isFirstIndirect := true
+		for _, f := range g.layout.Fields {
+			if f.Layout.From != "" {
+				if f.Name == field.Name {
+					break
+				} else {
+					isFirstIndirect = false
+					break
+				}
+			}
+		}
+
+		// If this is the first indirect slice, initialize the Data region
+		if isFirstIndirect {
+			// Find the metadata region to calculate elementsEnd
+			for _, region := range g.analyzed.Regions {
+				if region.Kind == analyzer.DynamicRegion &&
+				   region.Direction == parser.StartEnd &&
+				   region.ElementType != "byte" &&
+				   region.Field.Name == field.Layout.From {
+					countFieldName := strings.Split(region.Field.Layout.CountField, ".")[len(strings.Split(region.Field.Layout.CountField, "."))-1]
+					code.WriteString(fmt.Sprintf("\t// Initialize %s data region after metadata\n", field.Layout.Region))
+					code.WriteString(fmt.Sprintf("\telementsEnd := %d + int(p.%s)*%d\n",
+						region.Start, countFieldName, region.ElementSize))
+					code.WriteString(fmt.Sprintf("\tp.%s = p.buf[elementsEnd:%d]\n\n", field.Layout.Region, g.analyzed.BufferSize))
+					break
+				}
+			}
+		}
+	}
+
 	// Allocate slice matching source length
 	code.WriteString(fmt.Sprintf("\t// Reuse slice if capacity allows\n"))
 	code.WriteString(fmt.Sprintf("\tif cap(p.%s) >= len(p.%s) {\n", field.Name, field.Layout.From))
@@ -1433,6 +1500,110 @@ func (g *Generator) generateIndirectMarshal(field parser.Field) string {
 	code.WriteString(fmt.Sprintf("\t\tp.%s[i].%s = %s(offset)\n", field.Layout.From, field.Layout.OffsetField, offsetType))
 	code.WriteString(fmt.Sprintf("\t\tp.%s[i].%s = %s(size)\n", field.Layout.From, field.Layout.SizeField, sizeType))
 	code.WriteString("\t}\n\n")
+
+	return code.String()
+}
+
+// generateRebuildIndirectSlices generates a helper function to rebuild Elements and Data from indirect slices
+func (g *Generator) generateRebuildIndirectSlices() string {
+	var code strings.Builder
+
+	code.WriteString(fmt.Sprintf("\n// RebuildIndirectSlices rebuilds the physical layout from logical slices\n"))
+	code.WriteString(fmt.Sprintf("// Call this after modifying Keys/Values before calling MarshalLayout\n"))
+	code.WriteString(fmt.Sprintf("func (p *%s) RebuildIndirectSlices() {\n", g.analyzed.TypeName))
+
+	// Find the metadata slice (Elements) and data region (Data)
+	var metadataRegion *analyzer.Region
+	var dataRegion *analyzer.Region
+	
+	for i := range g.analyzed.Regions {
+		region := &g.analyzed.Regions[i]
+		if region.Kind == analyzer.DynamicRegion {
+			if region.Direction == parser.StartEnd && region.ElementType != "byte" {
+				metadataRegion = region
+			} else if region.Direction == parser.EndStart && region.Field.GoType == "[]byte" {
+				dataRegion = region
+			}
+		}
+	}
+
+	if metadataRegion == nil || dataRegion == nil {
+		// Can't rebuild without both metadata and data regions
+		code.WriteString("\t// No metadata/data regions to rebuild\n")
+		code.WriteString("}\n")
+		return code.String()
+	}
+
+	// Calculate where metadata ends
+	code.WriteString(fmt.Sprintf("\t// Calculate where %s ends\n", metadataRegion.Field.Name))
+	code.WriteString(fmt.Sprintf("\telementsEnd := %d + int(p.%s)*%d\n",
+		metadataRegion.Start,
+		strings.Split(metadataRegion.Field.Layout.CountField, ".")[len(strings.Split(metadataRegion.Field.Layout.CountField, "."))-1],
+		metadataRegion.ElementSize))
+
+	// Initialize Data buffer after Elements
+	code.WriteString(fmt.Sprintf("\t\n\t// Initialize %s buffer after %s\n", dataRegion.Field.Name, metadataRegion.Field.Name))
+	code.WriteString(fmt.Sprintf("\tp.%s = p.buf[elementsEnd:elementsEnd:%d]\n", dataRegion.Field.Name, g.analyzed.BufferSize))
+
+	// Rebuild metadata slice if needed
+	code.WriteString(fmt.Sprintf("\t\n\t// Rebuild %s array\n", metadataRegion.Field.Name))
+	code.WriteString(fmt.Sprintf("\tif cap(p.%s) >= int(p.%s) {\n",
+		metadataRegion.Field.Name,
+		strings.Split(metadataRegion.Field.Layout.CountField, ".")[len(strings.Split(metadataRegion.Field.Layout.CountField, "."))-1]))
+	code.WriteString(fmt.Sprintf("\t\tp.%s = p.%s[:p.%s]\n",
+		metadataRegion.Field.Name,
+		metadataRegion.Field.Name,
+		strings.Split(metadataRegion.Field.Layout.CountField, ".")[len(strings.Split(metadataRegion.Field.Layout.CountField, "."))-1]))
+	code.WriteString("\t} else {\n")
+	code.WriteString(fmt.Sprintf("\t\tp.%s = make([]%s, p.%s)\n",
+		metadataRegion.Field.Name,
+		metadataRegion.ElementType,
+		strings.Split(metadataRegion.Field.Layout.CountField, ".")[len(strings.Split(metadataRegion.Field.Layout.CountField, "."))-1]))
+	code.WriteString("\t}\n")
+
+	// Pack all indirect slices into Data backward from the end
+	code.WriteString("\t\n\t// Pack indirect slices into Data region backward from end\n")
+	code.WriteString(fmt.Sprintf("\toffset := %d\n", g.analyzed.BufferSize))
+
+	// Collect all indirect slice fields
+	var indirectFields []parser.Field
+	if g.layout != nil {
+		for _, field := range g.layout.Fields {
+			if field.Layout.From != "" {
+				indirectFields = append(indirectFields, field)
+			}
+		}
+	}
+
+	// Generate packing code: pack all fields for each element together
+	if len(indirectFields) > 0 {
+		// Determine count field from first indirect field
+		firstFrom := indirectFields[0].Layout.From
+
+		code.WriteString(fmt.Sprintf("\t\n\t// Pack all indirect slices backward from end (elements in forward order)\n"))
+		code.WriteString(fmt.Sprintf("\tfor i := 0; i < len(p.%s); i++ {\n", indirectFields[0].Name))
+
+		// Pack each field for this element in forward order (Key before Value)
+		for j := 0; j < len(indirectFields); j++ {
+			field := indirectFields[j]
+			offsetType := g.getMetadataFieldType(field.Layout.From, field.Layout.OffsetField)
+			sizeType := g.getMetadataFieldType(field.Layout.From, field.Layout.SizeField)
+			sizeVar := fmt.Sprintf("size%d", j)
+
+			code.WriteString(fmt.Sprintf("\t\t// Pack %s[i]\n", field.Name))
+			code.WriteString(fmt.Sprintf("\t\t%s := len(p.%s[i])\n", sizeVar, field.Name))
+			code.WriteString(fmt.Sprintf("\t\toffset -= %s\n", sizeVar))
+			code.WriteString(fmt.Sprintf("\t\tcopy(p.buf[offset:offset+%s], p.%s[i])\n", sizeVar, field.Name))
+			code.WriteString(fmt.Sprintf("\t\tp.%s[i].%s = %s(offset - elementsEnd)\n",
+				firstFrom, field.Layout.OffsetField, offsetType))
+			code.WriteString(fmt.Sprintf("\t\tp.%s[i].%s = %s(%s)\n",
+				firstFrom, field.Layout.SizeField, sizeType, sizeVar))
+		}
+
+		code.WriteString("\t}\n")
+	}
+
+	code.WriteString("}\n")
 
 	return code.String()
 }
