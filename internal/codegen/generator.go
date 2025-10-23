@@ -10,17 +10,18 @@ import (
 
 // Generator generates marshal/unmarshal code for binary layouts
 type Generator struct {
-	analyzed  *analyzer.AnalyzedLayout
-	layout    *parser.TypeLayout // Original parsed layout (for indirect slices)
-	registry  *analyzer.TypeRegistry
-	endian    string // "little" or "big"
-	mode      string // "copy" or "zerocopy"
-	align     int    // alignment requirement (0 = none)
-	allocator string // custom allocator function name (optional)
+	analyzed   *analyzer.AnalyzedLayout
+	layout     *parser.TypeLayout   // Original parsed layout (for indirect slices)
+	allLayouts []*parser.TypeLayout // All parsed layouts (for type lookups)
+	registry   *analyzer.TypeRegistry
+	endian     string // "little" or "big"
+	mode       string // "copy" or "zerocopy"
+	align      int    // alignment requirement (0 = none)
+	allocator  string // custom allocator function name (optional)
 }
 
 // NewGenerator creates a new code generator
-func NewGenerator(analyzed *analyzer.AnalyzedLayout, layout *parser.TypeLayout, reg *analyzer.TypeRegistry, endian string, mode string, align int, allocator string) *Generator {
+func NewGenerator(analyzed *analyzer.AnalyzedLayout, layout *parser.TypeLayout, allLayouts []*parser.TypeLayout, reg *analyzer.TypeRegistry, endian string, mode string, align int, allocator string) *Generator {
 	if endian == "" {
 		endian = "little"
 	}
@@ -28,13 +29,14 @@ func NewGenerator(analyzed *analyzer.AnalyzedLayout, layout *parser.TypeLayout, 
 		mode = "copy"
 	}
 	return &Generator{
-		analyzed:  analyzed,
-		layout:    layout,
-		registry:  reg,
-		endian:    endian,
-		mode:      mode,
-		align:     align,
-		allocator: allocator,
+		analyzed:   analyzed,
+		layout:     layout,
+		allLayouts: allLayouts,
+		registry:   reg,
+		endian:     endian,
+		mode:       mode,
+		align:      align,
+		allocator:  allocator,
 	}
 }
 
@@ -976,6 +978,38 @@ func (g *Generator) generateIndirectUnmarshal(field parser.Field) string {
 	return code.String()
 }
 
+// getMetadataFieldType looks up the type of a field in the metadata struct
+func (g *Generator) getMetadataFieldType(fromField, fieldName string) string {
+	// Find the source field in current layout
+	var sourceField *parser.Field
+	for i := range g.layout.Fields {
+		if g.layout.Fields[i].Name == fromField {
+			sourceField = &g.layout.Fields[i]
+			break
+		}
+	}
+	if sourceField == nil {
+		return "uint32" // fallback
+	}
+
+	// Extract element type from slice: []LeafElement → LeafElement
+	elemType := strings.TrimPrefix(sourceField.GoType, "[]")
+
+	// Find the element type's layout in all parsed layouts
+	for _, layout := range g.allLayouts {
+		if layout.Name == elemType {
+			// Find the field in this layout
+			for _, f := range layout.Fields {
+				if f.Name == fieldName {
+					return f.GoType
+				}
+			}
+		}
+	}
+
+	return "uint32" // fallback if not found
+}
+
 // generateIndirectMarshal generates marshal code for [][]byte with backward packing
 func (g *Generator) generateIndirectMarshal(field parser.Field) string {
 	var code strings.Builder
@@ -1003,13 +1037,17 @@ func (g *Generator) generateIndirectMarshal(field parser.Field) string {
 		packStart = fmt.Sprintf("%d", g.analyzed.BufferSize)
 	}
 
+	// Look up actual field types for offset and size
+	offsetType := g.getMetadataFieldType(field.Layout.From, field.Layout.OffsetField)
+	sizeType := g.getMetadataFieldType(field.Layout.From, field.Layout.SizeField)
+
 	code.WriteString(fmt.Sprintf("\toffset = %s\n", packStart))
 	code.WriteString(fmt.Sprintf("\tfor i := len(p.%s) - 1; i >= 0; i-- {\n", field.Name))
 	code.WriteString(fmt.Sprintf("\t\tsize := len(p.%s[i])\n", field.Name))
 	code.WriteString("\t\toffset -= size\n")
 	code.WriteString(fmt.Sprintf("\t\tcopy(buf[offset:offset+size], p.%s[i])\n", field.Name))
-	code.WriteString(fmt.Sprintf("\t\tp.%s[i].%s = uint32(offset)\n", field.Layout.From, field.Layout.OffsetField))
-	code.WriteString(fmt.Sprintf("\t\tp.%s[i].%s = uint32(size)\n", field.Layout.From, field.Layout.SizeField))
+	code.WriteString(fmt.Sprintf("\t\tp.%s[i].%s = %s(offset)\n", field.Layout.From, field.Layout.OffsetField, offsetType))
+	code.WriteString(fmt.Sprintf("\t\tp.%s[i].%s = %s(size)\n", field.Layout.From, field.Layout.SizeField, sizeType))
 	code.WriteString("\t}\n\n")
 
 	return code.String()

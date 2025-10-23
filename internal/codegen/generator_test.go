@@ -32,7 +32,7 @@ func TestGenerateFixedFields(t *testing.T) {
 		t.Fatalf("Analyze() error: %v", err)
 	}
 
-	gen := NewGenerator(analyzed, layout, reg, "little", "copy", 0, "")
+	gen := NewGenerator(analyzed, layout, []*parser.TypeLayout{layout}, reg, "little", "copy", 0, "")
 	code, err := gen.Generate()
 	if err != nil {
 		t.Fatalf("Generate() error: %v", err)
@@ -83,7 +83,7 @@ func TestGenerateMarshalFixedUint16(t *testing.T) {
 		t.Fatalf("Analyze() error: %v", err)
 	}
 
-	gen := NewGenerator(analyzed, layout, reg, "little", "copy", 0, "")
+	gen := NewGenerator(analyzed, layout, []*parser.TypeLayout{layout}, reg, "little", "copy", 0, "")
 	marshal := gen.GenerateMarshal()
 
 	// Check for correct binary operation
@@ -109,7 +109,7 @@ func TestGenerateUnmarshalFixedUint32(t *testing.T) {
 		t.Fatalf("Analyze() error: %v", err)
 	}
 
-	gen := NewGenerator(analyzed, layout, reg, "little", "copy", 0, "")
+	gen := NewGenerator(analyzed, layout, []*parser.TypeLayout{layout}, reg, "little", "copy", 0, "")
 	unmarshal := gen.GenerateUnmarshal()
 
 	// Check for correct binary operation
@@ -135,7 +135,7 @@ func TestGenerateByteField(t *testing.T) {
 		t.Fatalf("Analyze() error: %v", err)
 	}
 
-	gen := NewGenerator(analyzed, layout, reg, "little", "copy", 0, "")
+	gen := NewGenerator(analyzed, layout, []*parser.TypeLayout{layout}, reg, "little", "copy", 0, "")
 	marshal := gen.GenerateMarshal()
 	unmarshal := gen.GenerateUnmarshal()
 
@@ -167,7 +167,7 @@ func TestGenerateByteArray(t *testing.T) {
 		t.Fatalf("Analyze() error: %v", err)
 	}
 
-	gen := NewGenerator(analyzed, layout, reg, "little", "copy", 0, "")
+	gen := NewGenerator(analyzed, layout, []*parser.TypeLayout{layout}, reg, "little", "copy", 0, "")
 	marshal := gen.GenerateMarshal()
 	unmarshal := gen.GenerateUnmarshal()
 
@@ -199,7 +199,7 @@ func TestGenerateBigEndian(t *testing.T) {
 		t.Fatalf("Analyze() error: %v", err)
 	}
 
-	gen := NewGenerator(analyzed, layout, reg, "big", "copy", 0, "")
+	gen := NewGenerator(analyzed, layout, []*parser.TypeLayout{layout}, reg, "big", "copy", 0, "")
 	marshal := gen.GenerateMarshal()
 
 	// Check for big endian
@@ -269,7 +269,7 @@ func TestGenerateDynamicStartEnd(t *testing.T) {
 		t.Fatalf("Analyze() error: %v", err)
 	}
 
-	gen := NewGenerator(analyzed, layout, reg, "little", "copy", 0, "")
+	gen := NewGenerator(analyzed, layout, []*parser.TypeLayout{layout}, reg, "little", "copy", 0, "")
 	marshal := gen.GenerateMarshal()
 	unmarshal := gen.GenerateUnmarshal()
 
@@ -324,7 +324,7 @@ func TestGenerateDynamicWithCount(t *testing.T) {
 		t.Fatalf("Analyze() error: %v", err)
 	}
 
-	gen := NewGenerator(analyzed, layout, reg, "little", "copy", 0, "")
+	gen := NewGenerator(analyzed, layout, []*parser.TypeLayout{layout}, reg, "little", "copy", 0, "")
 	marshal := gen.GenerateMarshal()
 	unmarshal := gen.GenerateUnmarshal()
 
@@ -372,7 +372,7 @@ func TestGenerateDynamicEndStart(t *testing.T) {
 		t.Fatalf("Analyze() error: %v", err)
 	}
 
-	gen := NewGenerator(analyzed, layout, reg, "little", "copy", 0, "")
+	gen := NewGenerator(analyzed, layout, []*parser.TypeLayout{layout}, reg, "little", "copy", 0, "")
 	marshal := gen.GenerateMarshal()
 	unmarshal := gen.GenerateUnmarshal()
 
@@ -420,7 +420,7 @@ func TestGenerateComplete(t *testing.T) {
 		t.Fatalf("Analyze() error: %v", err)
 	}
 
-	gen := NewGenerator(analyzed, layout, reg, "little", "copy", 0, "")
+	gen := NewGenerator(analyzed, layout, []*parser.TypeLayout{layout}, reg, "little", "copy", 0, "")
 	code, err := gen.Generate()
 	if err != nil {
 		t.Fatalf("Generate() error: %v", err)
