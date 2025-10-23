@@ -341,9 +341,10 @@ func (g *Generator) generateNewFunction() string {
 				code.WriteString(fmt.Sprintf("\tp.%s = p.buf[%d:%d:%d]\n",
 					region.Field.Name, start, start, boundary))
 			} else {
-				// Backward: p.Field = p.buf[boundary:boundary:start]
-				code.WriteString(fmt.Sprintf("\tp.%s = p.buf[%d:%d:%d]\n",
-					region.Field.Name, boundary, boundary, start))
+				// Backward (end-start): don't initialize, will be set during unmarshal
+				// These regions are packed backward during marshal, not appendable
+				code.WriteString(fmt.Sprintf("\t// %s: end-start region, initialized during unmarshal\n",
+					region.Field.Name))
 			}
 		}
 	}
