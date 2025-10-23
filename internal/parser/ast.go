@@ -139,21 +139,12 @@ func validateStructFields(structType *ast.StructType, anno *TypeAnnotation) erro
 		fieldMap[fieldName] = fieldType
 	}
 
-	// Zerocopy with alignment or custom allocator requires backing and buf fields
+	// Zerocopy with alignment or custom allocator requires buf field
 	if anno.Align > 0 || anno.Allocator != "" {
-		// Check for backing []byte
-		backingType, hasBackingField := fieldMap["backing"]
-		if !hasBackingField {
-			if anno.Align > 0 {
-				return fmt.Errorf("zerocopy mode with align=%d requires field: backing []byte", anno.Align)
-			}
-			return fmt.Errorf("zerocopy mode with allocator=%s requires field: backing []byte", anno.Allocator)
-		}
-		if backingType != "[]byte" {
-			return fmt.Errorf("backing field must be []byte, got %s", backingType)
-		}
+		// When using allocator: backing is handled as local variable, only buf needed
+		// When using align without allocator: both backing and buf needed as struct fields
 
-		// Check for buf []byte
+		// Check for buf []byte (always required)
 		bufType, hasBufField := fieldMap["buf"]
 		if !hasBufField {
 			if anno.Align > 0 {
@@ -163,6 +154,17 @@ func validateStructFields(structType *ast.StructType, anno *TypeAnnotation) erro
 		}
 		if bufType != "[]byte" {
 			return fmt.Errorf("buf field must be []byte when using align or allocator, got %s", bufType)
+		}
+
+		// Check for backing []byte (only required when align without allocator)
+		if anno.Align > 0 && anno.Allocator == "" {
+			backingType, hasBackingField := fieldMap["backing"]
+			if !hasBackingField {
+				return fmt.Errorf("zerocopy mode with align=%d (no allocator) requires field: backing []byte", anno.Align)
+			}
+			if backingType != "[]byte" {
+				return fmt.Errorf("backing field must be []byte, got %s", backingType)
+			}
 		}
 	} else {
 		// Zerocopy without alignment or allocator requires buf [size]byte

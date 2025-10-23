@@ -2,9 +2,7 @@ package example
 
 // @layout size=4096 mode=zerocopy align=512 allocator=AllocateAlignedPage
 type PageCustomAllocator struct {
-	backing []byte // Over-allocated buffer for alignment
-	buf     []byte // Aligned region
-
+	buf    []byte // Aligned region (backing is handled by allocator)
 	Header uint16 `layout:"@0"`
 	Body   []byte `layout:"start-end"`
 	Footer uint64 `layout:"@4088"`

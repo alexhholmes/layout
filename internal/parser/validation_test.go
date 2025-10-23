@@ -66,7 +66,7 @@ type Page struct {
 			wantError: false,
 		},
 		{
-			name: "zerocopy with align - missing backing",
+			name: "zerocopy with align - missing backing (no allocator)",
 			code: `package test
 type Page struct {
 	buf    []byte
@@ -74,7 +74,7 @@ type Page struct {
 	Body   []byte
 }`,
 			wantError: true,
-			errMsg:    "zerocopy mode with align=512 requires field: backing []byte",
+			errMsg:    "zerocopy mode with align=512 (no allocator) requires field: backing []byte",
 		},
 		{
 			name: "zerocopy with align - missing buf",
@@ -142,7 +142,7 @@ type Page struct {
 				anno.Mode = "zerocopy"
 				// Set align if test mentions it
 				if tt.name == "zerocopy with align - requires backing and buf []byte" ||
-					tt.name == "zerocopy with align - missing backing" ||
+					tt.name == "zerocopy with align - missing backing (no allocator)" ||
 					tt.name == "zerocopy with align - missing buf" ||
 					tt.name == "zerocopy with align - wrong buf type" {
 					anno.Align = 512

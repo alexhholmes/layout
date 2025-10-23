@@ -8,24 +8,54 @@ import (
 	"unsafe"
 )
 
-func New() *PageCustomAllocator {
+func NewPageCustomAllocator() *PageCustomAllocator {
 	p := &PageCustomAllocator{}
 	// IMPORTANT: AllocateAlignedPage() must return a buffer of at least 4607 bytes
 	// (4096 bytes for data + 511 bytes for 512-byte alignment)
-	p.backing = AllocateAlignedPage()
+	backing := AllocateAlignedPage()
 	
 	// Validate buffer size to prevent out-of-bounds access
-	if len(p.backing) < 4607 {
-		panic(fmt.Sprintf("AllocateAlignedPage returned buffer of %d bytes, need at least 4607", len(p.backing)))
+	if len(backing) < 4607 {
+		panic(fmt.Sprintf("AllocateAlignedPage returned buffer of %d bytes, need at least 4607", len(backing)))
 	}
 	
 	// Find 512-byte aligned offset
-	addr := uintptr(unsafe.Pointer(&p.backing[0]))
+	addr := uintptr(unsafe.Pointer(&backing[0]))
 	offset := int(((addr + 511) &^ 511) - addr)
 	
 	// Slice aligned region
-	p.buf = p.backing[offset : offset+4096]
+	p.buf = backing[offset : offset+4096]
+	
+	// Initialize dynamic slices
+	p.Body = p.buf[2:2:4088]
 	return p
+}
+
+// Clone creates a copy of the PageCustomAllocator
+func (p *PageCustomAllocator) Clone() *PageCustomAllocator {
+	clone := NewPageCustomAllocator()
+	copy(clone.buf, p.buf)
+	return clone
+}
+
+// GetHeader returns uint16 at offset 0
+func (p *PageCustomAllocator) GetHeader() uint16 {
+	return *(*uint16)(unsafe.Pointer(&p.buf[0]))
+}
+
+// SetHeader sets uint16 at offset 0
+func (p *PageCustomAllocator) SetHeader(v uint16) {
+	*(*uint16)(unsafe.Pointer(&p.buf[0])) = v
+}
+
+// GetFooter returns uint64 at offset 4088
+func (p *PageCustomAllocator) GetFooter() uint64 {
+	return *(*uint64)(unsafe.Pointer(&p.buf[4088]))
+}
+
+// SetFooter sets uint64 at offset 4088
+func (p *PageCustomAllocator) SetFooter(v uint64) {
+	*(*uint64)(unsafe.Pointer(&p.buf[4088])) = v
 }
 
 func (p *PageCustomAllocator) MarshalLayout() ([]byte, error) {
@@ -41,7 +71,14 @@ func (p *PageCustomAllocator) MarshalLayout() ([]byte, error) {
 	return p.buf[:], nil
 }
 
-func (p *PageCustomAllocator) UnmarshalLayout() error {
+func (p *PageCustomAllocator) UnmarshalLayout(buf []byte) error {
+	// Zero-copy mode: copy buf into p.buf if different
+	if len(buf) > 0 && len(p.buf) > 0 {
+		if &buf[0] != &p.buf[0] {
+			copy(p.buf, buf)
+		}
+	}
+
 	// Header: uint16 at [0, 2)
 	p.Header = *(*uint16)(unsafe.Pointer(&p.buf[0]))
 
@@ -58,7 +95,7 @@ func (p *PageCustomAllocator) LoadFrom(r io.Reader) error {
 	if _, err := io.ReadFull(r, p.buf[:]); err != nil {
 		return err
 	}
-	return p.UnmarshalLayout()
+	return p.UnmarshalLayout(p.buf)
 }
 
 func (p *PageCustomAllocator) WriteTo(w io.Writer) error {

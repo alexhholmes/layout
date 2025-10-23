@@ -329,31 +329,37 @@ func (g *Generator) generateNewFunction() string {
 		requiredSize := g.analyzed.BufferSize + g.align - 1
 
 		if g.allocator != "" {
-			// Custom allocator with validation
+			// Custom allocator with validation - use local backing variable
 			code.WriteString(fmt.Sprintf("\t// IMPORTANT: %s() must return a buffer of at least %d bytes\n", g.allocator, requiredSize))
 			code.WriteString(fmt.Sprintf("\t// (%d bytes for data + %d bytes for %d-byte alignment)\n",
 				g.analyzed.BufferSize, g.align-1, g.align))
-			code.WriteString(fmt.Sprintf("\tp.backing = %s()\n", g.allocator))
+			code.WriteString(fmt.Sprintf("\tbacking := %s()\n", g.allocator))
 			code.WriteString("\t\n")
 			code.WriteString("\t// Validate buffer size to prevent out-of-bounds access\n")
-			code.WriteString(fmt.Sprintf("\tif len(p.backing) < %d {\n", requiredSize))
-			code.WriteString(fmt.Sprintf("\t\tpanic(fmt.Sprintf(\"%s returned buffer of %%d bytes, need at least %d\", len(p.backing)))\n",
+			code.WriteString(fmt.Sprintf("\tif len(backing) < %d {\n", requiredSize))
+			code.WriteString(fmt.Sprintf("\t\tpanic(fmt.Sprintf(\"%s returned buffer of %%d bytes, need at least %d\", len(backing)))\n",
 				g.allocator, requiredSize))
 			code.WriteString("\t}\n")
+			code.WriteString("\t\n")
+			code.WriteString(fmt.Sprintf("\t// Find %d-byte aligned offset\n", g.align))
+			code.WriteString("\taddr := uintptr(unsafe.Pointer(&backing[0]))\n")
+			code.WriteString(fmt.Sprintf("\toffset := int(((addr + %d) &^ %d) - addr)\n", g.align-1, g.align-1))
+			code.WriteString("\t\n")
+			code.WriteString("\t// Slice aligned region\n")
+			code.WriteString(fmt.Sprintf("\tp.buf = backing[offset : offset+%d]\n", g.analyzed.BufferSize))
 		} else {
-			// Default allocation
+			// Default allocation - backing must be a struct field to keep buffer alive
 			code.WriteString(fmt.Sprintf("\t// Allocate %d + %d to guarantee %d-byte alignment\n",
 				g.analyzed.BufferSize, g.align-1, g.align))
 			code.WriteString(fmt.Sprintf("\tp.backing = make([]byte, %d)\n", requiredSize))
+			code.WriteString("\t\n")
+			code.WriteString(fmt.Sprintf("\t// Find %d-byte aligned offset\n", g.align))
+			code.WriteString("\taddr := uintptr(unsafe.Pointer(&p.backing[0]))\n")
+			code.WriteString(fmt.Sprintf("\toffset := int(((addr + %d) &^ %d) - addr)\n", g.align-1, g.align-1))
+			code.WriteString("\t\n")
+			code.WriteString("\t// Slice aligned region\n")
+			code.WriteString(fmt.Sprintf("\tp.buf = p.backing[offset : offset+%d]\n", g.analyzed.BufferSize))
 		}
-
-		code.WriteString("\t\n")
-		code.WriteString(fmt.Sprintf("\t// Find %d-byte aligned offset\n", g.align))
-		code.WriteString("\taddr := uintptr(unsafe.Pointer(&p.backing[0]))\n")
-		code.WriteString(fmt.Sprintf("\toffset := int(((addr + %d) &^ %d) - addr)\n", g.align-1, g.align-1))
-		code.WriteString("\t\n")
-		code.WriteString("\t// Slice aligned region\n")
-		code.WriteString(fmt.Sprintf("\tp.buf = p.backing[offset : offset+%d]\n", g.analyzed.BufferSize))
 	} else {
 		// No alignment, direct allocation
 		if g.allocator != "" {
