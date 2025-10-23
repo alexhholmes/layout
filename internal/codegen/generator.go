@@ -275,6 +275,15 @@ func (g *Generator) generateZeroCopyUnmarshal() string {
 		}
 	}
 
+	// Rebuild indirect slices from metadata
+	if g.layout != nil {
+		for _, field := range g.layout.Fields {
+			if field.Layout.From != "" {
+				code.WriteString(g.generateIndirectUnmarshal(field))
+			}
+		}
+	}
+
 	code.WriteString("\treturn nil\n")
 	code.WriteString("}\n\n")
 
@@ -1346,7 +1355,7 @@ func (g *Generator) generateIndirectUnmarshal(field parser.Field) string {
 	code.WriteString(fmt.Sprintf("\tfor i := range p.%s {\n", field.Layout.From))
 	code.WriteString(fmt.Sprintf("\t\toffset := int(p.%s[i].%s)\n", field.Layout.From, field.Layout.OffsetField))
 	code.WriteString(fmt.Sprintf("\t\tsize := int(p.%s[i].%s)\n", field.Layout.From, field.Layout.SizeField))
-	code.WriteString(fmt.Sprintf("\t\tp.%s[i] = buf[offset:offset+size]\n", field.Name))
+	code.WriteString(fmt.Sprintf("\t\tp.%s[i] = p.%s[offset:offset+size]\n", field.Name, field.Layout.Region))
 	code.WriteString("\t}\n\n")
 
 	return code.String()
