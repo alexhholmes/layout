@@ -1544,6 +1544,43 @@ func (g *Generator) generateRebuildIndirectSlices() string {
 	code.WriteString(fmt.Sprintf("\t\n\t// Initialize %s buffer after %s\n", dataRegion.Field.Name, metadataRegion.Field.Name))
 	code.WriteString(fmt.Sprintf("\tp.%s = p.buf[elementsEnd:elementsEnd:%d]\n", dataRegion.Field.Name, g.analyzed.BufferSize))
 
+	// Find non-indirect fields in metadata element type that need to be preserved
+	var preserveFields []string
+	if g.layout != nil {
+		// Get the element type name
+		elemType := metadataRegion.ElementType
+
+		// Find the layout for this element type
+		for _, layout := range g.allLayouts {
+			if layout.Name == elemType {
+				// Get all field names used by indirect slices
+				usedFields := make(map[string]bool)
+				for _, field := range g.layout.Fields {
+					if field.Layout.From != "" && field.Layout.From == metadataRegion.Field.Name {
+						usedFields[field.Layout.OffsetField] = true
+						usedFields[field.Layout.SizeField] = true
+					}
+				}
+
+				// Find fields that aren't used by indirect slices
+				for _, f := range layout.Fields {
+					if !usedFields[f.Name] {
+						preserveFields = append(preserveFields, f.Name)
+					}
+				}
+				break
+			}
+		}
+	}
+
+	// Save non-indirect metadata fields if any exist
+	if len(preserveFields) > 0 {
+		code.WriteString(fmt.Sprintf("\t\n\t// Save non-indirect metadata fields before rebuilding %s\n", metadataRegion.Field.Name))
+		code.WriteString(fmt.Sprintf("\tsaved%s := make([]%s, len(p.%s))\n",
+			metadataRegion.Field.Name, metadataRegion.ElementType, metadataRegion.Field.Name))
+		code.WriteString(fmt.Sprintf("\tcopy(saved%s, p.%s)\n", metadataRegion.Field.Name, metadataRegion.Field.Name))
+	}
+
 	// Rebuild metadata slice if needed
 	code.WriteString(fmt.Sprintf("\t\n\t// Rebuild %s array\n", metadataRegion.Field.Name))
 	code.WriteString(fmt.Sprintf("\tif cap(p.%s) >= int(p.%s) {\n",
@@ -1600,6 +1637,16 @@ func (g *Generator) generateRebuildIndirectSlices() string {
 				firstFrom, field.Layout.OffsetField, offsetType))
 			code.WriteString(fmt.Sprintf("\t\tp.%s[i].%s = %s(%s)\n",
 				firstFrom, field.Layout.SizeField, sizeType, sizeVar))
+		}
+
+		// Restore non-indirect metadata fields
+		if len(preserveFields) > 0 {
+			code.WriteString("\n")
+			for _, fieldName := range preserveFields {
+				code.WriteString(fmt.Sprintf("\t\t// Restore %s\n", fieldName))
+				code.WriteString(fmt.Sprintf("\t\tp.%s[i].%s = saved%s[i].%s\n",
+					firstFrom, fieldName, metadataRegion.Field.Name, fieldName))
+			}
 		}
 
 		code.WriteString("\t}\n")
