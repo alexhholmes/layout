@@ -5,7 +5,7 @@ import (
 )
 
 func TestParseFile(t *testing.T) {
-	types, err := ParseFile("testdata/simple.go")
+	types, _, err := ParseFile("testdata/simple.go")
 	if err != nil {
 		t.Fatalf("ParseFile() error: %v", err)
 	}

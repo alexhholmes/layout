@@ -24,18 +24,21 @@ type Field struct {
 }
 
 // ParseFile parses a Go source file and extracts types with @layout annotations
-func ParseFile(filename string) ([]*TypeLayout, error) {
+// Returns type layouts and a registry with type aliases
+func ParseFile(filename string) ([]*TypeLayout, map[string]string, error) {
 	fset := token.NewFileSet()
 	file, err := parser.ParseFile(fset, filename, nil, parser.ParseComments)
 	if err != nil {
-		return nil, fmt.Errorf("parse error: %w", err)
+		return nil, nil, fmt.Errorf("parse error: %w", err)
 	}
 
-	return extractTypes(file), nil
+	types, aliases := extractTypes(file)
+	return types, aliases, nil
 }
 
-func extractTypes(file *ast.File) []*TypeLayout {
+func extractTypes(file *ast.File) ([]*TypeLayout, map[string]string) {
 	var types []*TypeLayout
+	aliases := make(map[string]string)
 
 	for _, decl := range file.Decls {
 		genDecl, ok := decl.(*ast.GenDecl)
@@ -45,6 +48,14 @@ func extractTypes(file *ast.File) []*TypeLayout {
 
 		for _, spec := range genDecl.Specs {
 			typeSpec := spec.(*ast.TypeSpec)
+
+			// Check for type alias: type PageID uint64
+			if ident, ok := typeSpec.Type.(*ast.Ident); ok {
+				// This is a type alias to a basic type
+				aliases[typeSpec.Name.Name] = ident.Name
+				continue
+			}
+
 			structType, ok := typeSpec.Type.(*ast.StructType)
 			if !ok {
 				continue // Not a struct
@@ -87,7 +98,7 @@ func extractTypes(file *ast.File) []*TypeLayout {
 		}
 	}
 
-	return types
+	return types, aliases
 }
 
 func extractAnnotation(doc *ast.CommentGroup) *TypeAnnotation {

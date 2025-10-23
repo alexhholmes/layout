@@ -291,11 +291,41 @@ pagePool.Put(page.backing)
 - `byte`, `bool`
 - `[N]byte` - byte arrays
 - Struct types with `@layout` annotation
+- Type aliases to primitive types (e.g., `type PageID uint64`)
 
 ### Dynamic fields
 - `[]byte` - byte slices (with or without count)
 - `[]StructType` - struct slices (requires count field)
 - `[][]byte` - indirect slices via metadata (see Indirect Slices)
+
+### Type Aliases
+
+Define custom types as aliases to primitives for type safety:
+
+```go
+type PageID uint64
+type Offset uint32
+
+// @layout size=16
+type PageHeader struct {
+    ID   PageID `layout:"@0"`
+    Next PageID `layout:"@8"`
+}
+```
+
+**Generated code** handles automatic type conversion:
+
+```go
+// Marshal: cast to underlying type
+binary.LittleEndian.PutUint64(buf[0:8], uint64(p.ID))
+
+// Unmarshal: cast back to alias type
+p.ID = PageID(binary.LittleEndian.Uint64(buf[0:8]))
+```
+
+**Supported**: Type aliases to any primitive integer type (`uint8/16/32/64`, `int8/16/32/64`).
+
+**Not supported**: Type aliases to structs, slices, or complex types.
 
 ## Generated Code
 

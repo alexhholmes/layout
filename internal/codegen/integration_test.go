@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	analyzer2 "github.com/alexhholmes/layout/internal/analyzer"
-	parser2 "github.com/alexhholmes/layout/internal/parser"
+	"github.com/alexhholmes/layout/internal/analyzer"
+	"github.com/alexhholmes/layout/internal/parser"
 )
 
 // TestIntegrationSimplePage demonstrates complete code generation flow
@@ -18,41 +18,41 @@ func TestIntegrationSimplePage(t *testing.T) {
 	//     Footer uint64 `layout:"@4088"`
 	// }
 
-	layout := &parser2.TypeLayout{
+	layout := &parser.TypeLayout{
 		Name: "Page",
-		Anno: &parser2.TypeAnnotation{Size: 4096, Endian: "little"},
-		Fields: []parser2.Field{
+		Anno: &parser.TypeAnnotation{Size: 4096, Endian: "little"},
+		Fields: []parser.Field{
 			{
 				Name:   "Header",
 				GoType: "uint16",
-				Layout: &parser2.FieldLayout{
+				Layout: &parser.FieldLayout{
 					Offset:    0,
-					Direction: parser2.Fixed,
+					Direction: parser.Fixed,
 				},
 			},
 			{
 				Name:   "Body",
 				GoType: "[]byte",
-				Layout: &parser2.FieldLayout{
+				Layout: &parser.FieldLayout{
 					Offset:    -1,
-					Direction: parser2.StartEnd,
+					Direction: parser.StartEnd,
 					StartAt:   -1,
 				},
 			},
 			{
 				Name:   "Footer",
 				GoType: "uint64",
-				Layout: &parser2.FieldLayout{
+				Layout: &parser.FieldLayout{
 					Offset:    4088,
-					Direction: parser2.Fixed,
+					Direction: parser.Fixed,
 				},
 			},
 		},
 	}
 
 	// Analyze layout
-	reg := analyzer2.NewTypeRegistry()
-	analyzed, err := analyzer2.Analyze(layout, reg)
+	reg := analyzer.NewTypeRegistry()
+	analyzed, err := analyzer.Analyze(layout, reg)
 	if err != nil {
 		t.Fatalf("Analyze failed: %v", err)
 	}
@@ -139,24 +139,24 @@ func TestIntegrationWithCountField(t *testing.T) {
 	//     Keys    []byte `layout:"start-end,count=NumKeys"`
 	// }
 
-	layout := &parser2.TypeLayout{
+	layout := &parser.TypeLayout{
 		Name: "Page",
-		Anno: &parser2.TypeAnnotation{Size: 4096, Endian: "little"},
-		Fields: []parser2.Field{
+		Anno: &parser.TypeAnnotation{Size: 4096, Endian: "little"},
+		Fields: []parser.Field{
 			{
 				Name:   "NumKeys",
 				GoType: "uint16",
-				Layout: &parser2.FieldLayout{
+				Layout: &parser.FieldLayout{
 					Offset:    0,
-					Direction: parser2.Fixed,
+					Direction: parser.Fixed,
 				},
 			},
 			{
 				Name:   "Keys",
 				GoType: "[]byte",
-				Layout: &parser2.FieldLayout{
+				Layout: &parser.FieldLayout{
 					Offset:     -1,
-					Direction:  parser2.StartEnd,
+					Direction:  parser.StartEnd,
 					StartAt:    -1,
 					CountField: "NumKeys",
 				},
@@ -164,8 +164,8 @@ func TestIntegrationWithCountField(t *testing.T) {
 		},
 	}
 
-	reg := analyzer2.NewTypeRegistry()
-	analyzed, err := analyzer2.Analyze(layout, reg)
+	reg := analyzer.NewTypeRegistry()
+	analyzed, err := analyzer.Analyze(layout, reg)
 	if err != nil {
 		t.Fatalf("Analyze failed: %v", err)
 	}
@@ -201,32 +201,32 @@ func TestIntegrationBackwardGrowth(t *testing.T) {
 	//     Keys   []byte `layout:"end-start"`
 	// }
 
-	layout := &parser2.TypeLayout{
+	layout := &parser.TypeLayout{
 		Name: "Page",
-		Anno: &parser2.TypeAnnotation{Size: 4096, Endian: "little"},
-		Fields: []parser2.Field{
+		Anno: &parser.TypeAnnotation{Size: 4096, Endian: "little"},
+		Fields: []parser.Field{
 			{
 				Name:   "Header",
 				GoType: "uint16",
-				Layout: &parser2.FieldLayout{
+				Layout: &parser.FieldLayout{
 					Offset:    0,
-					Direction: parser2.Fixed,
+					Direction: parser.Fixed,
 				},
 			},
 			{
 				Name:   "Keys",
 				GoType: "[]byte",
-				Layout: &parser2.FieldLayout{
+				Layout: &parser.FieldLayout{
 					Offset:    -1,
-					Direction: parser2.EndStart,
+					Direction: parser.EndStart,
 					StartAt:   -1,
 				},
 			},
 		},
 	}
 
-	reg := analyzer2.NewTypeRegistry()
-	analyzed, err := analyzer2.Analyze(layout, reg)
+	reg := analyzer.NewTypeRegistry()
+	analyzed, err := analyzer.Analyze(layout, reg)
 	if err != nil {
 		t.Fatalf("Analyze failed: %v", err)
 	}

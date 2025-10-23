@@ -69,14 +69,16 @@ func arraySize(goType string) (int, error) {
 	return n * elemSize, nil
 }
 
-// TypeRegistry tracks struct sizes for layout analysis
+// TypeRegistry tracks struct sizes and type aliases for layout analysis
 type TypeRegistry struct {
-	types map[string]int // type name → size in bytes
+	types   map[string]int    // type name → size in bytes
+	aliases map[string]string // alias → underlying type
 }
 
 func NewTypeRegistry() *TypeRegistry {
 	return &TypeRegistry{
-		types: make(map[string]int),
+		types:   make(map[string]int),
+		aliases: make(map[string]string),
 	}
 }
 
@@ -85,10 +87,29 @@ func (r *TypeRegistry) Register(name string, size int) {
 	r.types[name] = size
 }
 
+// RegisterAlias adds a type alias mapping (e.g., type PageID uint64)
+func (r *TypeRegistry) RegisterAlias(alias, underlying string) {
+	r.aliases[alias] = underlying
+}
+
 // Lookup returns the size of a registered type
 func (r *TypeRegistry) Lookup(name string) (int, bool) {
 	size, ok := r.types[name]
 	return size, ok
+}
+
+// ResolveType resolves type aliases to their underlying types
+// Returns the original type if not an alias
+func (r *TypeRegistry) ResolveType(goType string) string {
+	// Recursively resolve aliases
+	for {
+		if underlying, ok := r.aliases[goType]; ok {
+			goType = underlying
+		} else {
+			break
+		}
+	}
+	return goType
 }
 
 // SizeOfWithRegistry calculates size using registry for struct types
@@ -115,14 +136,17 @@ func (r *TypeRegistry) SizeOf(goType string) (int, error) {
 		}
 	}
 
+	// Resolve type aliases
+	resolved := r.ResolveType(goType)
+
 	// Try built-in types
-	size, err := SizeOf(goType)
+	size, err := SizeOf(resolved)
 	if err == nil {
 		return size, nil
 	}
 
 	// Check if it's a registered struct
-	if size, ok := r.Lookup(goType); ok {
+	if size, ok := r.Lookup(resolved); ok {
 		return size, nil
 	}
 

@@ -33,7 +33,7 @@ func main() {
 
 func generate(inputFile string) error {
 	// Parse input file
-	layouts, err := parser.ParseFile(inputFile)
+	layouts, aliases, err := parser.ParseFile(inputFile)
 	if err != nil {
 		return fmt.Errorf("parse failed: %w", err)
 	}
@@ -47,6 +47,11 @@ func generate(inputFile string) error {
 
 	// Analyze and generate for all types
 	registry := analyzer.NewTypeRegistry()
+
+	// Register type aliases
+	for alias, underlying := range aliases {
+		registry.RegisterAlias(alias, underlying)
+	}
 
 	// First pass: register all types in the registry
 	for _, layout := range layouts {

@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	analyzer2 "github.com/alexhholmes/layout/internal/analyzer"
-	parser2 "github.com/alexhholmes/layout/internal/parser"
+	"github.com/alexhholmes/layout/internal/analyzer"
+	"github.com/alexhholmes/layout/internal/parser"
 )
 
 func TestGenerateFixedFields(t *testing.T) {
@@ -13,21 +13,21 @@ func TestGenerateFixedFields(t *testing.T) {
 	//     Header uint64 `layout:"@0"`
 	//     Footer uint64 `layout:"@4088"`
 	// }
-	layout := &parser2.TypeLayout{
+	layout := &parser.TypeLayout{
 		Name: "Page",
-		Anno: &parser2.TypeAnnotation{Size: 4096},
-		Fields: []parser2.Field{
-			{Name: "Header", GoType: "uint64", Layout: &parser2.FieldLayout{
-				Offset: 0, Direction: parser2.Fixed,
+		Anno: &parser.TypeAnnotation{Size: 4096},
+		Fields: []parser.Field{
+			{Name: "Header", GoType: "uint64", Layout: &parser.FieldLayout{
+				Offset: 0, Direction: parser.Fixed,
 			}},
-			{Name: "Footer", GoType: "uint64", Layout: &parser2.FieldLayout{
-				Offset: 4088, Direction: parser2.Fixed,
+			{Name: "Footer", GoType: "uint64", Layout: &parser.FieldLayout{
+				Offset: 4088, Direction: parser.Fixed,
 			}},
 		},
 	}
 
-	reg := analyzer2.NewTypeRegistry()
-	analyzed, err := analyzer2.Analyze(layout, reg)
+	reg := analyzer.NewTypeRegistry()
+	analyzed, err := analyzer.Analyze(layout, reg)
 	if err != nil {
 		t.Fatalf("Analyze() error: %v", err)
 	}
@@ -67,18 +67,18 @@ func TestGenerateFixedFields(t *testing.T) {
 }
 
 func TestGenerateMarshalFixedUint16(t *testing.T) {
-	layout := &parser2.TypeLayout{
+	layout := &parser.TypeLayout{
 		Name: "Page",
-		Anno: &parser2.TypeAnnotation{Size: 4096},
-		Fields: []parser2.Field{
-			{Name: "Header", GoType: "uint16", Layout: &parser2.FieldLayout{
-				Offset: 0, Direction: parser2.Fixed,
+		Anno: &parser.TypeAnnotation{Size: 4096},
+		Fields: []parser.Field{
+			{Name: "Header", GoType: "uint16", Layout: &parser.FieldLayout{
+				Offset: 0, Direction: parser.Fixed,
 			}},
 		},
 	}
 
-	reg := analyzer2.NewTypeRegistry()
-	analyzed, err := analyzer2.Analyze(layout, reg)
+	reg := analyzer.NewTypeRegistry()
+	analyzed, err := analyzer.Analyze(layout, reg)
 	if err != nil {
 		t.Fatalf("Analyze() error: %v", err)
 	}
@@ -93,18 +93,18 @@ func TestGenerateMarshalFixedUint16(t *testing.T) {
 }
 
 func TestGenerateUnmarshalFixedUint32(t *testing.T) {
-	layout := &parser2.TypeLayout{
+	layout := &parser.TypeLayout{
 		Name: "Page",
-		Anno: &parser2.TypeAnnotation{Size: 4096},
-		Fields: []parser2.Field{
-			{Name: "Magic", GoType: "uint32", Layout: &parser2.FieldLayout{
-				Offset: 0, Direction: parser2.Fixed,
+		Anno: &parser.TypeAnnotation{Size: 4096},
+		Fields: []parser.Field{
+			{Name: "Magic", GoType: "uint32", Layout: &parser.FieldLayout{
+				Offset: 0, Direction: parser.Fixed,
 			}},
 		},
 	}
 
-	reg := analyzer2.NewTypeRegistry()
-	analyzed, err := analyzer2.Analyze(layout, reg)
+	reg := analyzer.NewTypeRegistry()
+	analyzed, err := analyzer.Analyze(layout, reg)
 	if err != nil {
 		t.Fatalf("Analyze() error: %v", err)
 	}
@@ -119,18 +119,18 @@ func TestGenerateUnmarshalFixedUint32(t *testing.T) {
 }
 
 func TestGenerateByteField(t *testing.T) {
-	layout := &parser2.TypeLayout{
+	layout := &parser.TypeLayout{
 		Name: "Page",
-		Anno: &parser2.TypeAnnotation{Size: 16},
-		Fields: []parser2.Field{
-			{Name: "Flag", GoType: "byte", Layout: &parser2.FieldLayout{
-				Offset: 0, Direction: parser2.Fixed,
+		Anno: &parser.TypeAnnotation{Size: 16},
+		Fields: []parser.Field{
+			{Name: "Flag", GoType: "byte", Layout: &parser.FieldLayout{
+				Offset: 0, Direction: parser.Fixed,
 			}},
 		},
 	}
 
-	reg := analyzer2.NewTypeRegistry()
-	analyzed, err := analyzer2.Analyze(layout, reg)
+	reg := analyzer.NewTypeRegistry()
+	analyzed, err := analyzer.Analyze(layout, reg)
 	if err != nil {
 		t.Fatalf("Analyze() error: %v", err)
 	}
@@ -151,18 +151,18 @@ func TestGenerateByteField(t *testing.T) {
 }
 
 func TestGenerateByteArray(t *testing.T) {
-	layout := &parser2.TypeLayout{
+	layout := &parser.TypeLayout{
 		Name: "Page",
-		Anno: &parser2.TypeAnnotation{Size: 32},
-		Fields: []parser2.Field{
-			{Name: "UUID", GoType: "[16]byte", Layout: &parser2.FieldLayout{
-				Offset: 0, Direction: parser2.Fixed,
+		Anno: &parser.TypeAnnotation{Size: 32},
+		Fields: []parser.Field{
+			{Name: "UUID", GoType: "[16]byte", Layout: &parser.FieldLayout{
+				Offset: 0, Direction: parser.Fixed,
 			}},
 		},
 	}
 
-	reg := analyzer2.NewTypeRegistry()
-	analyzed, err := analyzer2.Analyze(layout, reg)
+	reg := analyzer.NewTypeRegistry()
+	analyzed, err := analyzer.Analyze(layout, reg)
 	if err != nil {
 		t.Fatalf("Analyze() error: %v", err)
 	}
@@ -183,18 +183,18 @@ func TestGenerateByteArray(t *testing.T) {
 }
 
 func TestGenerateBigEndian(t *testing.T) {
-	layout := &parser2.TypeLayout{
+	layout := &parser.TypeLayout{
 		Name: "Page",
-		Anno: &parser2.TypeAnnotation{Size: 16, Endian: "big"},
-		Fields: []parser2.Field{
-			{Name: "Value", GoType: "uint32", Layout: &parser2.FieldLayout{
-				Offset: 0, Direction: parser2.Fixed,
+		Anno: &parser.TypeAnnotation{Size: 16, Endian: "big"},
+		Fields: []parser.Field{
+			{Name: "Value", GoType: "uint32", Layout: &parser.FieldLayout{
+				Offset: 0, Direction: parser.Fixed,
 			}},
 		},
 	}
 
-	reg := analyzer2.NewTypeRegistry()
-	analyzed, err := analyzer2.Analyze(layout, reg)
+	reg := analyzer.NewTypeRegistry()
+	analyzed, err := analyzer.Analyze(layout, reg)
 	if err != nil {
 		t.Fatalf("Analyze() error: %v", err)
 	}
@@ -209,7 +209,11 @@ func TestGenerateBigEndian(t *testing.T) {
 }
 
 func TestBinaryHelpers(t *testing.T) {
-	gen := &Generator{endian: "little"}
+	reg := analyzer.NewTypeRegistry()
+	gen := &Generator{
+		endian:   "little",
+		registry: reg,
+	}
 
 	tests := []struct {
 		goType  string
@@ -243,24 +247,24 @@ func TestGenerateDynamicStartEnd(t *testing.T) {
 	//     Body   []byte `layout:"start-end"`
 	//     Footer uint64 `layout:"@4088"`
 	// }
-	layout := &parser2.TypeLayout{
+	layout := &parser.TypeLayout{
 		Name: "Page",
-		Anno: &parser2.TypeAnnotation{Size: 4096},
-		Fields: []parser2.Field{
-			{Name: "Header", GoType: "uint16", Layout: &parser2.FieldLayout{
-				Offset: 0, Direction: parser2.Fixed,
+		Anno: &parser.TypeAnnotation{Size: 4096},
+		Fields: []parser.Field{
+			{Name: "Header", GoType: "uint16", Layout: &parser.FieldLayout{
+				Offset: 0, Direction: parser.Fixed,
 			}},
-			{Name: "Body", GoType: "[]byte", Layout: &parser2.FieldLayout{
-				Offset: -1, Direction: parser2.StartEnd, StartAt: -1,
+			{Name: "Body", GoType: "[]byte", Layout: &parser.FieldLayout{
+				Offset: -1, Direction: parser.StartEnd, StartAt: -1,
 			}},
-			{Name: "Footer", GoType: "uint64", Layout: &parser2.FieldLayout{
-				Offset: 4088, Direction: parser2.Fixed,
+			{Name: "Footer", GoType: "uint64", Layout: &parser.FieldLayout{
+				Offset: 4088, Direction: parser.Fixed,
 			}},
 		},
 	}
 
-	reg := analyzer2.NewTypeRegistry()
-	analyzed, err := analyzer2.Analyze(layout, reg)
+	reg := analyzer.NewTypeRegistry()
+	analyzed, err := analyzer.Analyze(layout, reg)
 	if err != nil {
 		t.Fatalf("Analyze() error: %v", err)
 	}
@@ -300,22 +304,22 @@ func TestGenerateDynamicWithCount(t *testing.T) {
 	//     BodyLen uint16 `layout:"@0"`
 	//     Body    []byte `layout:"start-end,count=BodyLen"`
 	// }
-	layout := &parser2.TypeLayout{
+	layout := &parser.TypeLayout{
 		Name: "Page",
-		Anno: &parser2.TypeAnnotation{Size: 4096},
-		Fields: []parser2.Field{
-			{Name: "BodyLen", GoType: "uint16", Layout: &parser2.FieldLayout{
-				Offset: 0, Direction: parser2.Fixed,
+		Anno: &parser.TypeAnnotation{Size: 4096},
+		Fields: []parser.Field{
+			{Name: "BodyLen", GoType: "uint16", Layout: &parser.FieldLayout{
+				Offset: 0, Direction: parser.Fixed,
 			}},
-			{Name: "Body", GoType: "[]byte", Layout: &parser2.FieldLayout{
-				Offset: -1, Direction: parser2.StartEnd, StartAt: -1,
+			{Name: "Body", GoType: "[]byte", Layout: &parser.FieldLayout{
+				Offset: -1, Direction: parser.StartEnd, StartAt: -1,
 				CountField: "BodyLen",
 			}},
 		},
 	}
 
-	reg := analyzer2.NewTypeRegistry()
-	analyzed, err := analyzer2.Analyze(layout, reg)
+	reg := analyzer.NewTypeRegistry()
+	analyzed, err := analyzer.Analyze(layout, reg)
 	if err != nil {
 		t.Fatalf("Analyze() error: %v", err)
 	}
@@ -349,21 +353,21 @@ func TestGenerateDynamicEndStart(t *testing.T) {
 	//     Header uint16 `layout:"@0"`
 	//     Keys   []byte `layout:"end-start"`
 	// }
-	layout := &parser2.TypeLayout{
+	layout := &parser.TypeLayout{
 		Name: "Page",
-		Anno: &parser2.TypeAnnotation{Size: 4096},
-		Fields: []parser2.Field{
-			{Name: "Header", GoType: "uint16", Layout: &parser2.FieldLayout{
-				Offset: 0, Direction: parser2.Fixed,
+		Anno: &parser.TypeAnnotation{Size: 4096},
+		Fields: []parser.Field{
+			{Name: "Header", GoType: "uint16", Layout: &parser.FieldLayout{
+				Offset: 0, Direction: parser.Fixed,
 			}},
-			{Name: "Keys", GoType: "[]byte", Layout: &parser2.FieldLayout{
-				Offset: -1, Direction: parser2.EndStart, StartAt: -1,
+			{Name: "Keys", GoType: "[]byte", Layout: &parser.FieldLayout{
+				Offset: -1, Direction: parser.EndStart, StartAt: -1,
 			}},
 		},
 	}
 
-	reg := analyzer2.NewTypeRegistry()
-	analyzed, err := analyzer2.Analyze(layout, reg)
+	reg := analyzer.NewTypeRegistry()
+	analyzed, err := analyzer.Analyze(layout, reg)
 	if err != nil {
 		t.Fatalf("Analyze() error: %v", err)
 	}
@@ -394,24 +398,24 @@ func TestGenerateDynamicEndStart(t *testing.T) {
 
 func TestGenerateComplete(t *testing.T) {
 	// Test complete generation with mixed fields
-	layout := &parser2.TypeLayout{
+	layout := &parser.TypeLayout{
 		Name: "Page",
-		Anno: &parser2.TypeAnnotation{Size: 4096},
-		Fields: []parser2.Field{
-			{Name: "Header", GoType: "uint64", Layout: &parser2.FieldLayout{
-				Offset: 0, Direction: parser2.Fixed,
+		Anno: &parser.TypeAnnotation{Size: 4096},
+		Fields: []parser.Field{
+			{Name: "Header", GoType: "uint64", Layout: &parser.FieldLayout{
+				Offset: 0, Direction: parser.Fixed,
 			}},
-			{Name: "Body", GoType: "[]byte", Layout: &parser2.FieldLayout{
-				Offset: -1, Direction: parser2.StartEnd, StartAt: -1,
+			{Name: "Body", GoType: "[]byte", Layout: &parser.FieldLayout{
+				Offset: -1, Direction: parser.StartEnd, StartAt: -1,
 			}},
-			{Name: "Footer", GoType: "uint64", Layout: &parser2.FieldLayout{
-				Offset: 4088, Direction: parser2.Fixed,
+			{Name: "Footer", GoType: "uint64", Layout: &parser.FieldLayout{
+				Offset: 4088, Direction: parser.Fixed,
 			}},
 		},
 	}
 
-	reg := analyzer2.NewTypeRegistry()
-	analyzed, err := analyzer2.Analyze(layout, reg)
+	reg := analyzer.NewTypeRegistry()
+	analyzed, err := analyzer.Analyze(layout, reg)
 	if err != nil {
 		t.Fatalf("Analyze() error: %v", err)
 	}

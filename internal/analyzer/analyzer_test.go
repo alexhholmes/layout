@@ -3,7 +3,7 @@ package analyzer
 import (
 	"testing"
 
-	parser2 "github.com/alexhholmes/layout/internal/parser"
+	"github.com/alexhholmes/layout/internal/parser"
 )
 
 func TestAnalyze_SimpleFixed(t *testing.T) {
@@ -11,15 +11,15 @@ func TestAnalyze_SimpleFixed(t *testing.T) {
 	//     Header uint64 `layout:"@0"`
 	//     Footer uint64 `layout:"@4088"`
 	// }
-	layout := &parser2.TypeLayout{
+	layout := &parser.TypeLayout{
 		Name: "Page",
-		Anno: &parser2.TypeAnnotation{Size: 4096},
-		Fields: []parser2.Field{
-			{Name: "Header", GoType: "uint64", Layout: &parser2.FieldLayout{
-				Offset: 0, Direction: parser2.Fixed,
+		Anno: &parser.TypeAnnotation{Size: 4096},
+		Fields: []parser.Field{
+			{Name: "Header", GoType: "uint64", Layout: &parser.FieldLayout{
+				Offset: 0, Direction: parser.Fixed,
 			}},
-			{Name: "Footer", GoType: "uint64", Layout: &parser2.FieldLayout{
-				Offset: 4088, Direction: parser2.Fixed,
+			{Name: "Footer", GoType: "uint64", Layout: &parser.FieldLayout{
+				Offset: 4088, Direction: parser.Fixed,
 			}},
 		},
 	}
@@ -57,18 +57,18 @@ func TestAnalyze_DynamicWithBoundary(t *testing.T) {
 	//     Body   []byte `layout:"start-end"`
 	//     Footer uint64 `layout:"@4088"`
 	// }
-	layout := &parser2.TypeLayout{
+	layout := &parser.TypeLayout{
 		Name: "Page",
-		Anno: &parser2.TypeAnnotation{Size: 4096},
-		Fields: []parser2.Field{
-			{Name: "Header", GoType: "uint16", Layout: &parser2.FieldLayout{
-				Offset: 0, Direction: parser2.Fixed,
+		Anno: &parser.TypeAnnotation{Size: 4096},
+		Fields: []parser.Field{
+			{Name: "Header", GoType: "uint16", Layout: &parser.FieldLayout{
+				Offset: 0, Direction: parser.Fixed,
 			}},
-			{Name: "Body", GoType: "[]byte", Layout: &parser2.FieldLayout{
-				Offset: -1, Direction: parser2.StartEnd, StartAt: -1,
+			{Name: "Body", GoType: "[]byte", Layout: &parser.FieldLayout{
+				Offset: -1, Direction: parser.StartEnd, StartAt: -1,
 			}},
-			{Name: "Footer", GoType: "uint64", Layout: &parser2.FieldLayout{
-				Offset: 4088, Direction: parser2.Fixed,
+			{Name: "Footer", GoType: "uint64", Layout: &parser.FieldLayout{
+				Offset: 4088, Direction: parser.Fixed,
 			}},
 		},
 	}
@@ -103,19 +103,19 @@ func TestAnalyze_MissingCountField(t *testing.T) {
 	//     Body    []byte `layout:"start-end"` // No count, no boundary
 	//     Tail    []byte `layout:"end-start"` // Dynamic field after
 	// }
-	layout := &parser2.TypeLayout{
+	layout := &parser.TypeLayout{
 		Name: "Page",
-		Anno: &parser2.TypeAnnotation{Size: 4096},
-		Fields: []parser2.Field{
-			{Name: "Header", GoType: "uint16", Layout: &parser2.FieldLayout{
-				Offset: 0, Direction: parser2.Fixed,
+		Anno: &parser.TypeAnnotation{Size: 4096},
+		Fields: []parser.Field{
+			{Name: "Header", GoType: "uint16", Layout: &parser.FieldLayout{
+				Offset: 0, Direction: parser.Fixed,
 			}},
-			{Name: "Body", GoType: "[]byte", Layout: &parser2.FieldLayout{
-				Offset: -1, Direction: parser2.StartEnd, StartAt: -1,
+			{Name: "Body", GoType: "[]byte", Layout: &parser.FieldLayout{
+				Offset: -1, Direction: parser.StartEnd, StartAt: -1,
 				CountField: "", // Missing count
 			}},
-			{Name: "Tail", GoType: "[]byte", Layout: &parser2.FieldLayout{
-				Offset: -1, Direction: parser2.EndStart, StartAt: -1,
+			{Name: "Tail", GoType: "[]byte", Layout: &parser.FieldLayout{
+				Offset: -1, Direction: parser.EndStart, StartAt: -1,
 			}},
 		},
 	}
@@ -138,15 +138,15 @@ func TestAnalyze_FixedOverlap(t *testing.T) {
 	//     Field1 uint64 `layout:"@0"`   // [0, 8)
 	//     Field2 uint64 `layout:"@4"`   // [4, 12) - overlaps!
 	// }
-	layout := &parser2.TypeLayout{
+	layout := &parser.TypeLayout{
 		Name: "Page",
-		Anno: &parser2.TypeAnnotation{Size: 4096},
-		Fields: []parser2.Field{
-			{Name: "Field1", GoType: "uint64", Layout: &parser2.FieldLayout{
-				Offset: 0, Direction: parser2.Fixed,
+		Anno: &parser.TypeAnnotation{Size: 4096},
+		Fields: []parser.Field{
+			{Name: "Field1", GoType: "uint64", Layout: &parser.FieldLayout{
+				Offset: 0, Direction: parser.Fixed,
 			}},
-			{Name: "Field2", GoType: "uint64", Layout: &parser2.FieldLayout{
-				Offset: 4, Direction: parser2.Fixed,
+			{Name: "Field2", GoType: "uint64", Layout: &parser.FieldLayout{
+				Offset: 4, Direction: parser.Fixed,
 			}},
 		},
 	}
@@ -180,19 +180,19 @@ func TestAnalyze_WithCountField(t *testing.T) {
 	//     Body    []byte `layout:"start-end,count=BodyLen"`
 	//     Tail    []byte `layout:"end-start"`
 	// }
-	layout := &parser2.TypeLayout{
+	layout := &parser.TypeLayout{
 		Name: "Page",
-		Anno: &parser2.TypeAnnotation{Size: 4096},
-		Fields: []parser2.Field{
-			{Name: "BodyLen", GoType: "uint16", Layout: &parser2.FieldLayout{
-				Offset: 0, Direction: parser2.Fixed,
+		Anno: &parser.TypeAnnotation{Size: 4096},
+		Fields: []parser.Field{
+			{Name: "BodyLen", GoType: "uint16", Layout: &parser.FieldLayout{
+				Offset: 0, Direction: parser.Fixed,
 			}},
-			{Name: "Body", GoType: "[]byte", Layout: &parser2.FieldLayout{
-				Offset: -1, Direction: parser2.StartEnd, StartAt: -1,
+			{Name: "Body", GoType: "[]byte", Layout: &parser.FieldLayout{
+				Offset: -1, Direction: parser.StartEnd, StartAt: -1,
 				CountField: "BodyLen",
 			}},
-			{Name: "Tail", GoType: "[]byte", Layout: &parser2.FieldLayout{
-				Offset: -1, Direction: parser2.EndStart, StartAt: -1,
+			{Name: "Tail", GoType: "[]byte", Layout: &parser.FieldLayout{
+				Offset: -1, Direction: parser.EndStart, StartAt: -1,
 			}},
 		},
 	}
@@ -213,15 +213,15 @@ func TestAnalyze_InvalidCountFieldType(t *testing.T) {
 	//     BodyLen string `layout:"@0"`  // Wrong type!
 	//     Body    []byte `layout:"start-end,count=BodyLen"`
 	// }
-	layout := &parser2.TypeLayout{
+	layout := &parser.TypeLayout{
 		Name: "Page",
-		Anno: &parser2.TypeAnnotation{Size: 4096},
-		Fields: []parser2.Field{
-			{Name: "BodyLen", GoType: "string", Layout: &parser2.FieldLayout{
-				Offset: 0, Direction: parser2.Fixed,
+		Anno: &parser.TypeAnnotation{Size: 4096},
+		Fields: []parser.Field{
+			{Name: "BodyLen", GoType: "string", Layout: &parser.FieldLayout{
+				Offset: 0, Direction: parser.Fixed,
 			}},
-			{Name: "Body", GoType: "[]byte", Layout: &parser2.FieldLayout{
-				Offset: -1, Direction: parser2.StartEnd, StartAt: -1,
+			{Name: "Body", GoType: "[]byte", Layout: &parser.FieldLayout{
+				Offset: -1, Direction: parser.StartEnd, StartAt: -1,
 				CountField: "BodyLen",
 			}},
 		},
@@ -240,15 +240,15 @@ func TestAnalyze_NestedCountField(t *testing.T) {
 	//     Header Header `layout:"@0"`      // Struct field
 	//     Body   []byte `layout:"start-end,count=Header.NumKeys"`
 	// }
-	layout := &parser2.TypeLayout{
+	layout := &parser.TypeLayout{
 		Name: "Page",
-		Anno: &parser2.TypeAnnotation{Size: 4096},
-		Fields: []parser2.Field{
-			{Name: "Header", GoType: "Header", Layout: &parser2.FieldLayout{
-				Offset: 0, Direction: parser2.Fixed,
+		Anno: &parser.TypeAnnotation{Size: 4096},
+		Fields: []parser.Field{
+			{Name: "Header", GoType: "Header", Layout: &parser.FieldLayout{
+				Offset: 0, Direction: parser.Fixed,
 			}},
-			{Name: "Body", GoType: "[]byte", Layout: &parser2.FieldLayout{
-				Offset: -1, Direction: parser2.StartEnd, StartAt: -1,
+			{Name: "Body", GoType: "[]byte", Layout: &parser.FieldLayout{
+				Offset: -1, Direction: parser.StartEnd, StartAt: -1,
 				CountField: "Header.NumKeys",
 			}},
 		},
@@ -271,12 +271,12 @@ func TestAnalyze_NestedCountField_ParentNotFound(t *testing.T) {
 	// type Page struct {
 	//     Body []byte `layout:"start-end,count=MissingField.NumKeys"`
 	// }
-	layout := &parser2.TypeLayout{
+	layout := &parser.TypeLayout{
 		Name: "Page",
-		Anno: &parser2.TypeAnnotation{Size: 4096},
-		Fields: []parser2.Field{
-			{Name: "Body", GoType: "[]byte", Layout: &parser2.FieldLayout{
-				Offset: -1, Direction: parser2.StartEnd, StartAt: -1,
+		Anno: &parser.TypeAnnotation{Size: 4096},
+		Fields: []parser.Field{
+			{Name: "Body", GoType: "[]byte", Layout: &parser.FieldLayout{
+				Offset: -1, Direction: parser.StartEnd, StartAt: -1,
 				CountField: "MissingField.NumKeys",
 			}},
 		},
@@ -294,15 +294,15 @@ func TestAnalyze_NestedCountField_TooManyLevels(t *testing.T) {
 	// type Page struct {
 	//     Body []byte `layout:"start-end,count=A.B.C"`
 	// }
-	layout := &parser2.TypeLayout{
+	layout := &parser.TypeLayout{
 		Name: "Page",
-		Anno: &parser2.TypeAnnotation{Size: 4096},
-		Fields: []parser2.Field{
-			{Name: "A", GoType: "SomeType", Layout: &parser2.FieldLayout{
-				Offset: 0, Direction: parser2.Fixed,
+		Anno: &parser.TypeAnnotation{Size: 4096},
+		Fields: []parser.Field{
+			{Name: "A", GoType: "SomeType", Layout: &parser.FieldLayout{
+				Offset: 0, Direction: parser.Fixed,
 			}},
-			{Name: "Body", GoType: "[]byte", Layout: &parser2.FieldLayout{
-				Offset: -1, Direction: parser2.StartEnd, StartAt: -1,
+			{Name: "Body", GoType: "[]byte", Layout: &parser.FieldLayout{
+				Offset: -1, Direction: parser.StartEnd, StartAt: -1,
 				CountField: "A.B.C",
 			}},
 		},

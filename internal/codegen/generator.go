@@ -303,25 +303,43 @@ func (g *Generator) generateFixedMarshal(region analyzer.Region) string {
 	// Comment
 	code.WriteString(fmt.Sprintf("\t// %s: %s at [%d, %d)\n", field.Name, field.GoType, start, end))
 
+	// Resolve type aliases for proper code generation
+	resolvedType := g.registry.ResolveType(field.GoType)
+
 	// Generate appropriate binary operation based on type
-	switch field.GoType {
+	switch resolvedType {
 	case "uint8", "int8", "byte":
 		code.WriteString(fmt.Sprintf("\tbuf[%d] = p.%s\n\n", start, field.Name))
 
 	case "uint16", "int16":
 		putFunc := g.binaryPutFunc(field.GoType)
-		code.WriteString(fmt.Sprintf("\t%s.%s(buf[%d:%d], p.%s)\n\n",
-			g.endianPrefix(), putFunc, start, end, field.Name))
+		// Cast if type is an alias
+		fieldExpr := fmt.Sprintf("p.%s", field.Name)
+		if resolvedType != field.GoType {
+			fieldExpr = fmt.Sprintf("%s(%s)", resolvedType, fieldExpr)
+		}
+		code.WriteString(fmt.Sprintf("\t%s.%s(buf[%d:%d], %s)\n\n",
+			g.endianPrefix(), putFunc, start, end, fieldExpr))
 
 	case "uint32", "int32":
 		putFunc := g.binaryPutFunc(field.GoType)
-		code.WriteString(fmt.Sprintf("\t%s.%s(buf[%d:%d], p.%s)\n\n",
-			g.endianPrefix(), putFunc, start, end, field.Name))
+		// Cast if type is an alias
+		fieldExpr := fmt.Sprintf("p.%s", field.Name)
+		if resolvedType != field.GoType {
+			fieldExpr = fmt.Sprintf("%s(%s)", resolvedType, fieldExpr)
+		}
+		code.WriteString(fmt.Sprintf("\t%s.%s(buf[%d:%d], %s)\n\n",
+			g.endianPrefix(), putFunc, start, end, fieldExpr))
 
 	case "uint64", "int64":
 		putFunc := g.binaryPutFunc(field.GoType)
-		code.WriteString(fmt.Sprintf("\t%s.%s(buf[%d:%d], p.%s)\n\n",
-			g.endianPrefix(), putFunc, start, end, field.Name))
+		// Cast if type is an alias
+		fieldExpr := fmt.Sprintf("p.%s", field.Name)
+		if resolvedType != field.GoType {
+			fieldExpr = fmt.Sprintf("%s(%s)", resolvedType, fieldExpr)
+		}
+		code.WriteString(fmt.Sprintf("\t%s.%s(buf[%d:%d], %s)\n\n",
+			g.endianPrefix(), putFunc, start, end, fieldExpr))
 
 	default:
 		// Handle arrays
@@ -351,25 +369,55 @@ func (g *Generator) generateFixedUnmarshal(region analyzer.Region) string {
 	// Comment
 	code.WriteString(fmt.Sprintf("\t// %s: %s at [%d, %d)\n", field.Name, field.GoType, start, end))
 
+	// Resolve type aliases for proper code generation
+	resolvedType := g.registry.ResolveType(field.GoType)
+
 	// Generate appropriate binary operation based on type
-	switch field.GoType {
+	switch resolvedType {
 	case "uint8", "int8", "byte":
 		code.WriteString(fmt.Sprintf("\tp.%s = buf[%d]\n\n", field.Name, start))
 
 	case "uint16", "int16":
 		getFunc := g.binaryGetFunc(field.GoType)
-		code.WriteString(fmt.Sprintf("\tp.%s = %s.%s(buf[%d:%d])\n\n",
-			field.Name, g.endianPrefix(), getFunc, start, end))
+		// Cast if type is an alias
+		castExpr := ""
+		if resolvedType != field.GoType {
+			castExpr = fmt.Sprintf("%s(", field.GoType)
+		}
+		code.WriteString(fmt.Sprintf("\tp.%s = %s%s.%s(buf[%d:%d])",
+			field.Name, castExpr, g.endianPrefix(), getFunc, start, end))
+		if castExpr != "" {
+			code.WriteString(")")
+		}
+		code.WriteString("\n\n")
 
 	case "uint32", "int32":
 		getFunc := g.binaryGetFunc(field.GoType)
-		code.WriteString(fmt.Sprintf("\tp.%s = %s.%s(buf[%d:%d])\n\n",
-			field.Name, g.endianPrefix(), getFunc, start, end))
+		// Cast if type is an alias
+		castExpr := ""
+		if resolvedType != field.GoType {
+			castExpr = fmt.Sprintf("%s(", field.GoType)
+		}
+		code.WriteString(fmt.Sprintf("\tp.%s = %s%s.%s(buf[%d:%d])",
+			field.Name, castExpr, g.endianPrefix(), getFunc, start, end))
+		if castExpr != "" {
+			code.WriteString(")")
+		}
+		code.WriteString("\n\n")
 
 	case "uint64", "int64":
 		getFunc := g.binaryGetFunc(field.GoType)
-		code.WriteString(fmt.Sprintf("\tp.%s = %s.%s(buf[%d:%d])\n\n",
-			field.Name, g.endianPrefix(), getFunc, start, end))
+		// Cast if type is an alias
+		castExpr := ""
+		if resolvedType != field.GoType {
+			castExpr = fmt.Sprintf("%s(", field.GoType)
+		}
+		code.WriteString(fmt.Sprintf("\tp.%s = %s%s.%s(buf[%d:%d])",
+			field.Name, castExpr, g.endianPrefix(), getFunc, start, end))
+		if castExpr != "" {
+			code.WriteString(")")
+		}
+		code.WriteString("\n\n")
 
 	default:
 		// Handle arrays
@@ -389,7 +437,10 @@ func (g *Generator) generateFixedUnmarshal(region analyzer.Region) string {
 
 // binaryPutFunc returns the binary.PutXXX function name for a type
 func (g *Generator) binaryPutFunc(goType string) string {
-	switch goType {
+	// Resolve type aliases
+	resolved := g.registry.ResolveType(goType)
+
+	switch resolved {
 	case "uint16":
 		return "PutUint16"
 	case "uint32":
@@ -409,7 +460,10 @@ func (g *Generator) binaryPutFunc(goType string) string {
 
 // binaryGetFunc returns the binary.Uint32() function name for a type
 func (g *Generator) binaryGetFunc(goType string) string {
-	switch goType {
+	// Resolve type aliases
+	resolved := g.registry.ResolveType(goType)
+
+	switch resolved {
 	case "uint16":
 		return "Uint16"
 	case "uint32":
